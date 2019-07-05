@@ -1,0 +1,10 @@
+*parquet
+*csv
+*txt
+*pb
+*json
+*ipynb
+*pyc
+.idea/
+__pycache__
+events*
