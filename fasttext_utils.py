@@ -218,29 +218,6 @@ def train_val_split_from_df(path_to_df, text_field, label_field, split_params={}
 
     return preprocess_and_save(df, val_mask, text_field, label_field, preprocessing_function,
                                additional_fields_and_preps, save_dir, postfix, verbose, print_items)
-    # val = df[val_mask]
-    # train = df[~val_mask]
-    # if preprocessing_function is not None:
-    #     print_items.append("preprocessing descriptions")
-    #     train[text_field] = train[text_field].map(lambda s: preprocessing_function(str(s)))
-    #     train = train[train[text_field] != ""]
-    #     val[text_field] = val[text_field].map(lambda s: preprocessing_function(str(s)))
-    #
-    # if verbose:
-    #     [print(i) for i in print_items]
-    # train["label"] = train[label_field].apply(lambda x: "__label__{}".format(x))
-    # val["label"] = val[label_field].apply(lambda x: "__label__{}".format(x))
-    # use_cols = ["label", text_field] + list(additional_fields_and_preps.keys())
-    # train_data = [" ".join(i) for i in train[use_cols].values]
-    # val_data = [" ".join(i) for i in val[use_cols].values]
-    # save_dir = validate(save_dir)
-    # save_path_train = join(save_dir, "train{}.txt".format(postfix))
-    # save_path_val = join(save_dir, "val{}.txt".format(postfix))
-    # with open(save_path_train, "w") as outfile:
-    #     outfile.write("\n".join(train_data))
-    # with open(save_path_val, "w") as outfile:
-    #     outfile.write("\n".join(val_data))
-    # return save_path_train, save_path_val
 
 
 def check_model_presence(log_dir, n_epochs):

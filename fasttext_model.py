@@ -154,34 +154,6 @@ class FastTextModel:
                                                                   self._weights_ph: batch_weights}))
         return np.squeeze(embs)
 
-    # def get_subword_id(self, subword):
-    #     """
-    #     Given a subword, return the index (within input matrix) it is stored at.
-    #     :param subword:
-    #     :return: int. Returns -1 if subword is not in vocabulary
-    #     """
-    #     if self.preprocessing_function:
-    #         subword = self.preprocessing_function(subword)
-    #     subword_transformed = "_".join(get_all(subword.split(), self.info["word_ngrams"], self.info["sort_ngrams"]))
-    #     return self.train_vocab[subword_transformed]["id"] if subword_transformed in self.train_vocab else -1
-
-    # def get_subwords(self, word):
-    #     """
-    #     Given a word, get the subwords and their indicies.
-    #     :param word: str
-    #     :return: list
-    #     """
-    #     if self.preprocessing_function:
-    #         word = self.preprocessing_function(word)
-    #     word_splitted = list(get_all(word.split(), self.info["word_ngrams"], self.info["sort_ngrams"]))
-    #
-    #     if len(word_splitted) > self.info["word_ngrams"]:
-    #         return [], np.array([])
-    #     else:
-    #         subwords = [phrase for phrase in word_splitted if phrase in self.train_vocab]
-    #         subword_ids = np.array([self.get_word_id(subword) for subword in subwords])
-    #         return subwords, subword_ids
-
     def get_word_id(self, word):
         """
         Given a word, get the word id within the dictionary. Returns -1 if word is not in the dictionary.
@@ -499,7 +471,6 @@ class train_supervised(FastTextModel):
         args = ["--{} {}".format(k, v) for k, v in self.hyperparams.items()]
         cur_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
         command = " ".join(["python3 {}".format(os.path.join(cur_dir, "main.py"))] + args)
-        # print(command)
         return command
 
 
