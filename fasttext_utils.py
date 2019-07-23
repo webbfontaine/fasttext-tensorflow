@@ -88,7 +88,7 @@ def make_train_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, re
     :param return_inverse: bool, return tuple (train_vocab, inverse_vocab), where keys to inverse_vocab are the word ids
     """
     print("\n\nCreating train vocabulary ...")
-    cnt, id_cnt, train_vocab = 0, 1, {}
+    cnt, id_cnt, train_vocab = 0, 1, {"__MEAN_EMBEDDING__": {"cnt": len(list_of_descriptions), "id": 0}}
     for cur_desc_split in tqdm(list_of_descriptions):
         cur_len = len(cur_desc_split)
         for ng in get_all(cur_desc_split, min(cur_len, word_n_grams), sort_ngrams=sort_ngrams):
