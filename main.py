@@ -383,9 +383,10 @@ def main():
             output = tf.nn.softmax(logits, name="prediction")
             # this is not used in the training, but will be used for inference
 
+            label_argmax = tf.argmax(labels_ph, axis=1)
             with tf.name_scope("accuracy"):
-                correctly_predicted = tf.nn.in_top_k(logits, tf.argmax(labels_ph, axis=1), 1, name="top_1")
-                correctly_predicted_top_k = tf.nn.in_top_k(logits, tf.argmax(labels_ph, axis=1), top_k, name="top_k")
+                correctly_predicted = tf.nn.in_top_k(logits, label_argmax, 1, name="top_1")
+                correctly_predicted_top_k = tf.nn.in_top_k(logits, label_argmax, top_k, name="top_k")
 
             train_writer = tf.summary.FileWriter(os.path.join(result_dir, "train"), sess.graph)
             train_end_writer = tf.summary.FileWriter(os.path.join(result_dir, "end_epoch_train"))
