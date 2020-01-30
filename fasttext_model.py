@@ -1,37 +1,58 @@
-import tensorflow as tf
+import inspect
+import json
+import os
+import warnings
+from subprocess import (
+    Popen,
+    PIPE,
+    STDOUT,
+)
+
 import numpy as np
 import pandas as pd
-from fasttext_utils import next_batch, get_all, train_val_split_from_df, parse_txt, preprocess_and_save
-from utils import load_graph, hash_, validate, hash_function, handle_space_paths, copy_all, split_list
-import os
-import gc
-import json
 from tqdm import tqdm
-from subprocess import Popen, PIPE, STDOUT
-import warnings
-import inspect
+import tensorflow as tf
+
+from fasttext_utils import (
+    get_all,
+    parse_txt,
+    next_batch,
+    preprocess_data,
+    get_accuracy_log_dir,
+)
+from utils import (
+    load_graph,
+    hash_,
+    validate,
+    handle_space_paths,
+    copy_all,
+)
 
 warnings.filterwarnings("ignore")
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 
-class FastTextModel:
+class FastTextModel(object):
     def __init__(self, model_path, model_params_path, label_prefix="__label__", preprocessing_function=None,
-                 use_gpu=False, gpu_fraction=0.5, hyperparams={}):
+                 use_gpu=True, gpu_fraction=0.5, hyperparams=None):
         """
-        Load already trained fasttext model
-        :param model_path: str, path to model file (with .pb extension)
-        :param model_params_path: str, path to model_params.json
-        :param label_prefix: str
-        :param preprocessing_function: function, function to apply on data before prediction
-        :param use_gpu: bool, use gpu
-        :param gpu_fraction: float, how much of gpu to use (ignored if use_gpu is False)
-        :param hyperparams: dict, do not pass this if you are just loading model, it is used internally
+        :param model_path: str, path to pb file
+        :param model_params_path: str, path to pb model_params.json
+        :param label_prefix: list, prefix for labels
+        :param preprocessing_function: function, function to apply on data
+        :param use_gpu: bool, use gpu for training
+        :param gpu_fraction: float, gpu fraction to allocate
+        :param hyperparams: dict, all hyperparams for train_supervised
+        :return: object, the trained model
         """
         tf.reset_default_graph()
+        self._graph = tf.Graph()
         self.label_prefix = label_prefix
-        self.hyperparams = hyperparams
+        if hyperparams:
+            self.hyperparams = hyperparams
+        else:
+            self.hyperparams = dict()
         self.info = {"model_path": os.path.abspath(model_path), "model_params_path": os.path.abspath(model_params_path)}
         with open(model_params_path, "r") as infile:
             model_params = json.load(infile)
@@ -62,21 +83,21 @@ class FastTextModel:
         get_list = [i + ":0" for i in get_list]
 
         self._device = "/cpu:0"
+        config = tf.ConfigProto(device_count={"GPU": 0}, allow_soft_placement=True)
         if use_gpu:
             self._device = "/gpu:0"
             config = tf.ConfigProto(allow_soft_placement=True,
                                     gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_fraction,
                                                               allow_growth=True))
-        else:
-            config = tf.ConfigProto(device_count={"GPU": 0}, allow_soft_placement=True)
 
         with tf.device(self._device):
-            self._sess = tf.Session(config=config)
-            self._input_ph, self._weights_ph, self._input_mat, self._sent_vec, self._output_mat, self._output = \
-                load_graph(model_path, get_list)
+            with self._graph.as_default():
+                self._input_ph, self._weights_ph, self._input_mat, self._sent_vec, self._output_mat, self._output = \
+                    load_graph(model_path, get_list)
 
-        self._dim = self.get_dimension()
-        _ = self.predict([""] * 3, show_progress=False)  # warm-up)
+            self._sess = tf.Session(graph=self._graph, config=config)
+        self.dim = self.get_dimension()
+        _ = self.predict([""] * 3, batch_size=3, show_progress=False)  # warm up
 
     def __del__(self):
         with tf.device(self._device):
@@ -122,11 +143,16 @@ class FastTextModel:
         :param text: str
         :return: (list, list)
         """
-        words = " ".join([i for i in text.split() if not i.startswith(self.label_prefix)])
+        words, labels = [], []
+        for token in text.split():
+            if token.startswith(self.label_prefix) and ():
+                if token[len(self.label_prefix):] in self.label_vocab:
+                    labels.append(token)
+            else:
+                words.append(token)
         if self.preprocessing_function:
-            words = self.preprocessing_function(words)
-        return words.split(), [i for i in text.split() if i.startswith(self.label_prefix) and
-                               (i[len(self.label_prefix):]) in self.label_vocab]
+            words = self.preprocessing_function(" ".join(words)).split()
+        return words, labels
 
     def get_output_matrix(self):
         """
@@ -144,22 +170,35 @@ class FastTextModel:
         :return: np.ndarray, size: dim
         """
         t = type(text)
-        assert t in [list, str, np.ndarray]
-        if t == str:
+        if t not in [list, str, np.ndarray, pd.Series]:
+            raise ValueError("text should be string, list, numpy array or pandas series")
+        if isinstance(t, str):
             text = [text]
-        embs = []
+        embeddings = []
 
         for batch, batch_weights in self._batch_generator(text, batch_size):
-            embs.extend(self._sess.run(self._sent_vec, feed_dict={self._input_ph: batch,
-                                                                  self._weights_ph: batch_weights}))
-        return np.squeeze(embs)
+            embeddings.extend(self._sess.run(self._sent_vec, feed_dict={self._input_ph: batch,
+                                                                        self._weights_ph: batch_weights}))
+        return np.squeeze(embeddings)
 
-    def get_word_id(self, word):
+    def get_subword_id(self, subword):
         """
-        Given a word, get the word id within the dictionary. Returns -1 if word is not in the dictionary.
-        :param word:
+        Given a subword, get the word id within the dictionary. Returns -1 if word is not in the dictionary.
+        :param subword:
         :return: int. Returns -1 if is not in vocabulary
         """
+        subword_transformed = "_".join(subword.split())
+        return self.train_vocab[subword_transformed]["id"] if subword_transformed in self.train_vocab else -1
+
+    def get_subwords(self, word):
+        word_splitted = word.split()
+        if len(word_splitted) > self.info["word_ngrams"]:
+            return []
+        else:
+            return [phrase for phrase in get_all(word_splitted, self.info["word_ngrams"], self.info["sort_ngrams"])
+                    if phrase in self.train_vocab]
+
+    def get_word_id(self, word):
         return self.train_vocab[word]["id"] if word in self.train_vocab else -1
 
     def get_word_vector(self, word):
@@ -185,11 +224,12 @@ class FastTextModel:
             return words, [self.train_vocab[k]["cnt"] for k in words]
         return words
 
-    def _batch_generator(self, list_of_texts, batch_size):
+    def _batch_generator(self, list_of_texts, batch_size, show_progress=False):
         """
         Generate batch from list of texts
         :param list_of_texts: list/array
         :param batch_size: int
+        :param show_progress: bool, show progress bar
         :return: batch word indices, batch word weights
         """
         if self.preprocessing_function:
@@ -198,6 +238,12 @@ class FastTextModel:
             list_of_texts = [str(t) for t in list_of_texts]
         inds = np.arange(len(list_of_texts))
         rem_inds, batch_inds = next_batch(inds, batch_size)
+
+        if len(list_of_texts) <= batch_size:
+            show_progress = False
+
+        disable_progress_bar = not show_progress
+        progress_bar = tqdm(total=int(np.ceil(len(list_of_texts) / batch_size)), disable=disable_progress_bar)
 
         while len(batch_inds) > 0:
             batch, batch_weights = [], []
@@ -220,7 +266,10 @@ class FastTextModel:
             batch_weights = np.expand_dims(batch_weights, 2)
             batch = np.array(batch)
 
+            progress_bar.update()
             yield batch, batch_weights
+
+        progress_bar.close()
 
     def predict(self, list_of_texts, k=1, batch_size=100, threshold=-0.1, show_progress=True):
         """
@@ -232,18 +281,13 @@ class FastTextModel:
         :param show_progress: bool, ignored if list of text is string or has smaller or equal length to batch size
         :return: top k predictions and probabilities
         """
-        if type(list_of_texts) == str:
+        if isinstance(list_of_texts, str):
             list_of_texts = [list_of_texts]
 
         labels = self.get_labels()
         preds, probs = [], []
 
-        if len(list_of_texts) <= batch_size:
-            show_progress = False
-
-        if show_progress:
-            progress_bar = tqdm(total=int(np.ceil(len(list_of_texts) / batch_size)))
-        for batch, batch_weights in self._batch_generator(list_of_texts, batch_size):
+        for batch, batch_weights in self._batch_generator(list_of_texts, batch_size, show_progress):
             batch_probs = self._sess.run(self._output, feed_dict={self._input_ph: batch,
                                                                   self._weights_ph: batch_weights})
 
@@ -262,10 +306,6 @@ class FastTextModel:
                 top_k_probs.append(prob_row)
             preds.extend(top_k_preds)
             probs.extend(top_k_probs)
-            if show_progress:
-                progress_bar.update()
-        if show_progress:
-            progress_bar.close()
         return preds, probs
 
     def test(self, list_of_texts, list_of_labels, batch_size=100, k=1, threshold=-0.1, show_progress=True):
@@ -279,14 +319,15 @@ class FastTextModel:
         :param show_progress: bool
         :return: top k predictions and probabilities
         """
-        assert len(list_of_texts) == len(list_of_labels), 'the lengths of list_of_texts and list_of_labels must match'
+        if len(list_of_texts) != len(list_of_labels):
+            raise ValueError('the lengths of list_of_texts and list_of_labels must match')
 
         preds, probs = self.predict(list_of_texts=list_of_texts, batch_size=batch_size, k=k,
                                     threshold=threshold, show_progress=show_progress)
         recall, precision = 0, 0
         total_lbs, total_preds = 0, 0
         for lbs, prds in zip(list_of_labels, preds):
-            if type(lbs) != list:
+            if not isinstance(lbs, list):
                 lbs = [lbs]
 
             total_lbs += len(lbs)
@@ -324,8 +365,8 @@ class FastTextModel:
         if "train_path" in self.hyperparams:
             all_paths.append(self.hyperparams["train_path"])
 
-        if "validation_path" in self.hyperparams:
-            all_paths.append(self.hyperparams["validation_path"])
+        if "test_path" in self.hyperparams:
+            all_paths.append(self.hyperparams["test_path"])
 
         if "original_train_path" in self.hyperparams:
             all_paths.append(self.hyperparams["original_train_path"])
@@ -337,60 +378,74 @@ class FastTextModel:
 
 
 class train_supervised(FastTextModel):
-    def __init__(self, train_data_path, val_data_path=None, additional_data_paths=None, hyperparams={},
-                 preprocessing_function=None, log_dir="./", use_gpu=False, verbose=True, remove_extra_labels=True):
+    def __init__(self, train_path, test_path=None, additional_data_paths=None, hyperparams=None,
+                 preprocessing_function=None, log_dir="./", use_gpu=False, gpu_fraction=0.5, verbose=True,
+                 remove_extra_labels=True):
         """
         Train a supervised fasttext model
-        :param train_data_path: str, path to train.txt file
-        :param val_data_path: str, path to val.txt file. if val_data_path is None the score won't be keeped in
-        history.json
+        :param train_path: str, path to train file
+        :param test_path: str or None, path to test file, if None training will be done without test
         :param additional_data_paths: list of str, paths of fasttext format additional data to concat with train file
         :param hyperparams: dict, all hyperparams for train_supervised
         :param preprocessing_function: function, function to apply on text data before feeding into network
         :param log_dir: str, directory to save the training files and the model
         :param use_gpu: bool, use gpu for training
+        :param gpu_fraction: float, gpu fraction to allocate
+        :param remove_extra_labels: bool, remove data from additional paths, which have labels not contained in
+            train.txt
         :param verbose: bool
         :param remove_extra_labels: bool, remove datapoints with labels which appear in additional_data_paths but not in
         train_data_path. Ignored if additional_data_paths is None
         :return: object, the trained model
         """
         log_dir = validate(log_dir)
+
+        # defualt hyperparams
         self.hyperparams = \
-            {"train_path": handle_space_paths("./train.txt"),
-             "validation_path": handle_space_paths(""),
-             "min_word_count": 1,
-             "min_label_count": 1,
+            {"train_path": '',
+             "test_path": '',
              "label_prefix": "__label__",
-             "dim": 100,
-             "n_epochs": 10,
+             "data_fraction": 1,
+             "seed": 17,
+             "embedding_dim": 100,
+             "num_epochs": 10,
              "word_ngrams": 1,
              "sort_ngrams": 0,
-             "batch_size": 1024,
-             "batch_size_inference": 1024,
-             "batch_norm": 0,
-             "seed": 17,
-             "top_k": 5,
-             "learning_rate": 0.3,
-             "learning_rate_multiplier": 0.8,
+             "batch_size": 4096,
+             "use_batch_norm": 0,
+             "min_word_count": 1,
+             "learning_rate": 0.1,
+             "learning_rate_multiplier": 0.7,
              "dropout": 0.5,
-             "l2_reg_weight": 1e-06,
-             "data_fraction": 1,
-             "save_models": 0,
-             "use_validation": 0,
+             "l2_reg_weight": 1e-07,
+             "batch_size_inference": 4096,
+             "top_k": 5,
+             "compare_top_k": 0,
+             "save_all_models": 0,
+             "use_test": 0,
              "use_gpu": 0,
              "gpu_fraction": 0.5,
-             "force": 0,
              "cache_dir": handle_space_paths(os.path.abspath(os.path.join(log_dir, "cache"))),
-             "result_dir": handle_space_paths(os.path.abspath(os.path.join(log_dir, "results"))),
+             "log_dir": handle_space_paths(os.path.abspath(os.path.join(log_dir, "results"))),
+             "force": 0,
+             "progress_bar": 1,
              "flush": 1}
 
-        assert os.path.exists(train_data_path), "train_data_path is incorrect"
-        if val_data_path:
-            assert os.path.exists(val_data_path), "val_data_path is incorrect"
-            self.hyperparams["use_validation"] = 1
-            self.hyperparams["validation_path"] = val_data_path
+        if not os.path.exists(train_path):
+            raise FileNotFoundError("train_path is incorrect")
+        if test_path:
+            if not os.path.exists(test_path):
+                raise FileNotFoundError("test_path is incorrect")
 
-        to_restore = {}
+        if preprocessing_function and verbose:
+            print("Preprocessing train data ...")
+        to_restore = dict()
+
+        if hyperparams is None:
+            hyperparams = dict()
+
+        do_preprocessing = preprocessing_function is not None
+
         if len(hyperparams) != 0:
             for k, v in hyperparams.items():
                 if k not in self.hyperparams:
@@ -398,278 +453,84 @@ class train_supervised(FastTextModel):
                     if k != "split_and_train_params":
                         print("WARNING! {} not in hyperparams, ignoring it".format(k))
                 else:
-                    if k in ["train_path", "validation_path", "cache_dir", "result_dir"]:
+                    if k in ["cache_dir", "log_dir"]:
                         self.hyperparams[k] = handle_space_paths(v)
                     else:
                         self.hyperparams[k] = v
-
-        train_data_path = os.path.abspath(train_data_path)
+        train_path = os.path.abspath(train_path)
         if additional_data_paths:
             data_to_save = []
             paths_joined_hashed = hash_(" ".join(additional_data_paths))
-            concat_path = "/tmp/tmp.txt"
-            joined_path = "/tmp/{}.txt".format(paths_joined_hashed)
-            os.system("cat {} {} > {}".format(train_data_path, val_data_path, concat_path))
-            _, all_labels = parse_txt(train_data_path)
-            unique_labels = set(all_labels)
-            assert type(additional_data_paths) == list, "type of additional_data_paths should be list"
+            concat_path = "./tmp.txt"
+            joined_path = "./{}.txt".format(paths_joined_hashed)
+            _, all_labels = parse_txt(train_path)
+            unique_labels = np.unique(all_labels)
+            if not isinstance(additional_data_paths, list):
+                raise ValueError("Type of additional_data_paths should be list")
             for additional_data_path in additional_data_paths:
-                assert os.path.exists(additional_data_path), "val_data_path is incorrect"
-                current_data, current_labels = parse_txt(additional_data_path, join_desc=True)
+                if not os.path.isfile(additional_data_path):
+                    raise FileNotFoundError("{} in additional data paths doesn't exist".format(additional_data_path))
+                current_data, current_labels = parse_txt(additional_data_path)
                 if remove_extra_labels:
-                    needed_inds = [i for i, j in enumerate(current_labels) if j in unique_labels]
-                    current_data = [current_data[i] for i in needed_inds]
-                    current_labels = [current_labels[i] for i in needed_inds]
-                data_to_save.extend(["{}{} {}".format(self.hyperparams["label_prefix"], i, j) for i, j
-                                     in zip(current_labels, current_data)])
-            with open(concat_path, "w+") as outfile:
-                outfile.write("\n".join(data_to_save))
-            os.system("cat {} {} > {}".format(concat_path, train_data_path, joined_path))
+                    needed_mask = np.in1d(current_labels, unique_labels)
+                    current_data = [data for data, needed in zip(current_data, needed_mask) if needed]
+                    current_labels = [data for data, needed in zip(current_labels, needed_mask) if needed]
+                if do_preprocessing:
+                    data_to_save.extend(["{}{} {}".
+                                        format(self.hyperparams["label_prefix"], i, preprocessing_function(j)) for i, j
+                                         in zip(current_labels, current_data)])
+                else:
+                    data_to_save.extend(["{}{} {}".format(self.hyperparams["label_prefix"], i, j) for i, j
+                                         in zip(current_labels, current_data)])
+            np.savetxt(concat_path, data_to_save, fmt="%s")
+            if do_preprocessing:
+                prep_train_path = preprocess_data(train_path, preprocessing_function)
+                os.system("cat {} {} > {}".format(concat_path, prep_train_path, joined_path))
+                to_restore["original_train_path"] = prep_train_path
+            else:
+                os.system("cat {} {} > {}".format(concat_path, train_path, joined_path))
+                to_restore["original_train_path"] = train_path
             self.hyperparams["train_path"] = joined_path
-            to_restore["original_train_path"] = train_data_path
             to_restore["additional_data_paths"] = additional_data_paths
         else:
-            self.hyperparams["train_path"] = train_data_path
+            if do_preprocessing:
+                prep_train_path = preprocess_data(train_path, preprocessing_function)
+                self.hyperparams["train_path"] = prep_train_path
+            else:
+                self.hyperparams["train_path"] = train_path
+
+        if preprocessing_function and verbose:
+            print("Done!")
+
+        if test_path is not None:
+            self.hyperparams["use_test"] = 1
+            if do_preprocessing:
+                prep_test_path = preprocess_data(test_path, preprocessing_function)
+                to_restore["original_test_path"] = test_path
+                self.hyperparams["test_path"] = prep_test_path
+            else:
+                self.hyperparams["test_path"] = test_path
 
         if use_gpu:
             self.hyperparams["use_gpu"] = 1
+            self.hyperparams["gpu_fraction"] = gpu_fraction
 
+        # using Popen as calling the command from Jupyter doesn't deallocate GPU memory
         command = self._get_command()
         process = Popen(command, stdout=PIPE, shell=True, stderr=STDOUT, bufsize=1, close_fds=True)
+        self.top_1_accuracy, self.top_k_accuracy, log_dir = \
+            get_accuracy_log_dir(process, self.hyperparams["top_k"], verbose)
 
-        for line in iter(process.stdout.readline, b""):
-            line = line.rstrip().decode("utf-8")
-            if "stored at" in line:
-                log_dir_line = line
-
-            if "accuracy" in line:
-                line_split = line.split()
-                if "val" in line:
-                    self.top_1_accuracy = float(line_split[-4][:-1])
-                    self.top_k_accuracy = float(line_split[-1])
-                else:
-                    if str(1) in line.split():
-                        self.top_1_accuracy = float(line_split[-1])
-                    if str(self.hyperparams["top_k"]) in line.split():
-                        self.top_k_accuracy = float(line_split[-1])
-
-            if verbose:
-                print(line)
-        process.stdout.close()
-
-        log_dir_split = log_dir_line.split("at ")
         for k, v in to_restore.items():
             self.hyperparams[k] = v
-        super(train_supervised, self). \
-            __init__(model_path=os.path.join(log_dir_split[-1], "model_ep{}.pb".format(self.hyperparams["n_epochs"])),
-                     model_params_path=os.path.join(log_dir_split[-1], "model_params.json"),
-                     use_gpu=use_gpu, label_prefix=self.hyperparams["label_prefix"],
-                     preprocessing_function=preprocessing_function,
-                     hyperparams=self.hyperparams)
+        super(train_supervised, self).__init__(model_path=os.path.join(log_dir, "model_best.pb"),
+                                               model_params_path=os.path.join(log_dir, "model_params.json"),
+                                               use_gpu=use_gpu, gpu_fraction=gpu_fraction, hyperparams=self.hyperparams,
+                                               label_prefix=self.hyperparams["label_prefix"],
+                                               preprocessing_function=preprocessing_function)
 
     def _get_command(self):
-        args = ["--{} {}".format(k, v) for k, v in self.hyperparams.items()]
+        args = ["--{} {}".format(k, v) for k, v in self.hyperparams.items() if str(v)]
         cur_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
         command = " ".join(["python3 {}".format(os.path.join(cur_dir, "main.py"))] + args)
         return command
-
-
-def split_and_train(path_to_df, text_field, label_field, split_params={}, save_dir="./", preprocessing_function=None,
-                    additional_fields_and_preps={}, additional_data_paths=[], hyperparams={}, log_dir="./",
-                    use_gpu=False, postfix="", verbose=True, remove_extra_labels=True):
-    """
-    Split dataframe with the given params into train and test. Train a model on train and
-    :param path_to_df: str, path to csv or parquet file
-    :param text_field: str, column of the dataframe in which is the text that should be classified
-    :param label_field: str, column of the dataframe in which is the label of the corresponding text
-    :param split_params: dict, input format: {"seed": int, default 17, "fraction": float, default: 0.1}
-    :param save_dir: str, directory to save the txt files
-    :param preprocessing_function: function, function to apply on text_field column
-    :param additional_fields_and_preps: dict. Dictionary in the following format
-    {field_name1: preprocessing_function1, field_name2: preprocessing_function2} to enable custom preprocessing for
-    different fields
-    :param additional_data_paths: list of str, paths of fasttext format additional data to concat with train file
-    :param hyperparams: dict, all hyperparams for train_supervised
-    :param log_dir: str, directory to save the training files and the model
-    :param postfix: str, postfix to add to train and validation files
-    :param verbose: bool
-    :param use_gpu: bool, use gpu for training
-    :param verbose: bool
-    :param remove_extra_labels: remove datapoints with labels which appear in additional_data_paths but not in
-    train_data_path
-    :return: object. FastTextModel
-    """
-
-    train_data_path, val_data_path = \
-        train_val_split_from_df(path_to_df=path_to_df, text_field=text_field, label_field=label_field,
-                                split_params=split_params, save_dir=save_dir,
-                                preprocessing_function=preprocessing_function, verbose=verbose,
-                                additional_fields_and_preps=additional_fields_and_preps, postfix=postfix)
-    if verbose:
-        print("train path {}".format(train_data_path))
-        print("val path {}".format(val_data_path))
-
-    hypers_new = hyperparams.copy()
-
-    if additional_fields_and_preps:
-        hypers_new["result_dir"] = os.path.join(log_dir, "{}_{}".format(hash_function(preprocessing_function),
-                                                                        "_".join(additional_fields_and_preps.keys())))
-    else:
-        hypers_new["result_dir"] = os.path.join(log_dir, hash_function(preprocessing_function))
-    hypers_new["use_gpu"] = int(use_gpu)
-    hypers_new["split_and_train_params"] = {
-        "df_path": path_to_df, "split_params": split_params,
-        "additional_fields_and_preps": additional_fields_and_preps, "remove_extra_labels": remove_extra_labels
-    }
-
-    return train_supervised(train_data_path=train_data_path, val_data_path=val_data_path,
-                            additional_data_paths=additional_data_paths, hyperparams=hypers_new,
-                            preprocessing_function=preprocessing_function, remove_extra_labels=remove_extra_labels,
-                            log_dir=log_dir, use_gpu=use_gpu, verbose=verbose)
-
-
-def cross_validate(path_to_df, text_field, label_field, n_folds=5, preprocessing_function=None,
-                   additional_fields_and_preps={}, additional_data_paths=[], hyperparams={}, report_top_k=True,
-                   log_dir="./", use_gpu=False, return_models=False, seed=17, verbose=False, remove_extra_labels=True):
-    """
-
-    :param path_to_df: str, path to csv or parquet file
-    :param text_field: str, column of the dataframe in which is the text that should be classified
-    :param label_field: str, column of the dataframe in which is the label of the corresponding text
-    :param n_folds: int, number of folds
-    :param preprocessing_function: function, function to apply on text_field column
-    :param additional_fields_and_preps: dict. Dictionary in the following format
-    {field_name1: preprocessing_function1, field_name2: preprocessing_function2} to enable custom preprocessing for
-    different fields
-    :param additional_data_paths: list of str, paths of fasttext format additional data to concat with train file
-     :param hyperparams: dict, all hyperparams for train_supervised
-    :param report_top_k: bool. If True will return top k scores, otherwise top 1 scores
-    :param log_dir: str, directory to save the training files and the model
-    :param use_gpu: bool, use gpu for training
-    :param return_models: bool. If True will return tuple (scores, models)
-    :param seed: int
-    :param verbose: bool.
-    :param remove_extra_labels: remove datapoints with labels which appear in additional_data_paths but not in
-    train_data_path
-    :return: list. The scores for each split
-    """
-    models, scores = [], []
-
-    if path_to_df.endswith("parquet"):
-        df = pd.read_parquet(path_to_df)
-    else:
-        df = pd.read_csv(path_to_df)
-
-    for added_field, prep_f in additional_fields_and_preps.items():
-        if df[added_field].dtype != "object":
-            df[added_field] = df[added_field].astype(str)
-        if prep_f:
-            df[added_field] = df[added_field].map(prep_f)
-        df[text_field] = df[text_field] + " " + df[added_field]
-
-    for fold_number, val_mask in enumerate(split_list(len(df), n_folds, seed)):
-        train_data_path, val_data_path = preprocess_and_save(df, val_mask, text_field, label_field,
-                                                             preprocessing_function, additional_fields_and_preps,
-                                                             "./tmp_txt/", "_split{}".format(fold_number), verbose, [])
-
-        if verbose:
-            print("train path {}".format(train_data_path))
-            print("val path {}".format(val_data_path))
-
-        hypers_new = hyperparams.copy()
-
-        if additional_fields_and_preps:
-            hypers_new["result_dir"] = os.path.join(log_dir, "{}_{}".format(hash_function(preprocessing_function),
-                                                                            "_".join(
-                                                                                additional_fields_and_preps.keys())))
-        else:
-            hypers_new["result_dir"] = os.path.join(log_dir, hash_function(preprocessing_function))
-        hypers_new["use_gpu"] = int(use_gpu)
-        hypers_new["split_and_train_params"] = {
-            "df_path": path_to_df,
-            "additional_fields_and_preps": additional_fields_and_preps, "remove_extra_labels": remove_extra_labels
-        }
-
-        model = train_supervised(train_data_path=train_data_path, val_data_path=val_data_path,
-                                 additional_data_paths=additional_data_paths, hyperparams=hypers_new,
-                                 preprocessing_function=preprocessing_function, remove_extra_labels=remove_extra_labels,
-                                 log_dir=log_dir, use_gpu=use_gpu, verbose=verbose)
-
-        if report_top_k:
-            scores.append(model.top_k_accuracy)
-        else:
-            scores.append(model.top_1_accuracy)
-        if return_models:
-            models.append(model)
-        del model
-        gc.collect()
-    if return_models:
-        return scores, models
-    return scores
-
-
-def test_on_df(model_or_path, path_to_df, text_field, label_field, preprocessing_function=None,
-               additional_fields_and_preps={}, label_prefix="__label__", use_gpu=False, top_k=5, batch_size=100):
-    """
-     Test the given model on a parquet or csv file.
-    :param model_or_path: str or object. FastTextModel or the directory where it is located
-    :param path_to_df: str. Path to csv or parquet file
-    :param text_field: str. Field of dataframe which contains text to be classified
-    :param label_field: str. Field of dataframe which contains the labels
-    :param preprocessing_function: function. Function to apply on texts before prediction
-    :param additional_fields_and_preps: dict. Dictionary in the following format
-    {field_name1: preprocessing_function1, field_name2: preprocessing_function2} to enable custom preprocessing for
-    different fields
-    :param label_prefix: str. Default - "__label__"
-    :param use_gpu: bool. Use gpu for the inference
-    :param top_k: int. Calculate scores for top k prediction
-    :param batch_size: int
-    :return: tuple. (Recall on top k, Recall on top 1)
-    """
-    if type(model_or_path) == str:
-        all_models = [i for i in os.listdir(model_or_path) if i.endswith("pb")]
-        last_model = max(all_models, key=lambda m: int(m.split("_ep")[-1].split(".")[0]))
-
-        model = FastTextModel(model_path=os.path.join(model_or_path, last_model),
-                              model_params_path=os.path.join(model_or_path, "model_params.json"),
-                              use_gpu=use_gpu, label_prefix=label_prefix,
-                              preprocessing_function=preprocessing_function)
-
-    else:
-        model = model_or_path
-        if preprocessing_function:
-            model.preprocessing_function = preprocessing_function
-
-    if path_to_df.endswith("parquet"):
-        df = pd.read_parquet(path_to_df)
-    elif path_to_df.endswith("csv"):
-        df = pd.read_csv(path_to_df)
-    else:
-        print("dataframe should be either csv or parquet file.\nexiting.")
-        exit()
-    model_unique_labels = set(model.get_labels())
-    if model.preprocessing_function:
-        if df[text_field].dtype == "object":
-            df[text_field] = df[text_field].map(model.preprocessing_function)
-        else:
-            df[text_field] = df[text_field].map(lambda s: model.preprocessing_function(str(s)))
-
-    for added_field, prep_f in additional_fields_and_preps.items():
-        if df[added_field].dtype != "object":
-            df[added_field] = df[added_field].astype(str)
-        if prep_f:
-            df[added_field] = df[added_field].map(prep_f)
-        df[text_field] = df[text_field] + " " + df[added_field]
-
-    preds, _ = model.predict(list_of_texts=df[text_field], batch_size=batch_size, k=top_k)
-    right_preds_top_1, right_preds_top_k, new_label_cnt = 0, 0, 0
-    for true_label, preds_k in zip(df[label_field], preds):
-        if true_label not in model_unique_labels:
-            new_label_cnt += 1
-        if true_label == preds_k[0]:
-            right_preds_top_1 += 1
-        if true_label in preds_k:
-            right_preds_top_k += 1
-    if new_label_cnt > 0:
-        print('{}% of data is missclassified because of new label'.format(round(100 * new_label_cnt / len(df), 2)))
-    return np.round([100 * right_preds_top_k / len(df), 100 * right_preds_top_1 / len(df)], 2)

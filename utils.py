@@ -1,12 +1,15 @@
 import os
 import hashlib
-from tensorflow.python import graph_util
-import tensorflow as tf
 from shutil import copy
+
 import numpy as np
+import tensorflow as tf
+from tensorflow.python import graph_util
 
 
 def validate(path):
+    if '"' in path:
+        path = path.split('"')[1]
     path = os.path.abspath(path)
     if not os.path.exists(path):
         os.mkdir(path)
@@ -22,26 +25,26 @@ def freeze_save_graph(sess, log_dir, name, output_node):
     tf.train.write_graph(optimized_net, log_dir, name, False)
 
 
-def load_graph(graph_path, return_elements=[]):
+def load_graph(graph_path, return_elements=None):
     with tf.gfile.GFile(graph_path, 'rb') as infile:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(infile.read())
-        output_nodes = tf.import_graph_def(graph_def, return_elements=return_elements)
+        output_nodes = tf.import_graph_def(graph_def, return_elements=return_elements, name="")
         return output_nodes
 
 
-def hash_(st):
-    return hashlib.md5(st.encode("utf-8")).hexdigest()
+def hash_(value):
+    return hashlib.md5(value.encode("utf-8")).hexdigest()
 
 
-def hash2_(st):
-    return int.from_bytes(hashlib.md5(st.encode("utf-8")).digest(), "little")
+def hash2_(value):
+    return int.from_bytes(hashlib.md5(str(value).encode("utf-8")).digest(), "little")
 
 
 def hash_xor_data(list_of_texts):
-    init_hash = hash2_(str(list_of_texts[0]))
+    init_hash = hash2_(list_of_texts[0])
     for text in list_of_texts[1:]:
-        init_hash = init_hash ^ hash2_(str(text))
+        init_hash = init_hash ^ hash2_(text)
     return str(init_hash)
 
 
@@ -58,7 +61,9 @@ def get_cache_hash(list_of_texts, data_specific_params):
 
 
 def handle_space_paths(path):
-    return '"{}"'.format(path)
+    if " " in path:
+        return '"{}"'.format(path)
+    return path
 
 
 def copy_all(list_of_paths, destination_path):
@@ -69,14 +74,14 @@ def copy_all(list_of_paths, destination_path):
             print("invalid path, no such file {}".format(src_path))
 
 
-def percent(x, multiplier=100, precision=2):
+def percent_array(x, multiplier=100, precision=2):
     return np.round(multiplier * np.mean(x), precision)
 
 
-def dummy_print(x):
-    print('\n' + '*' * 20)
+def dummy_print(x, num_asterisks=20):
+    print('\n' + '*' * num_asterisks)
     print(x)
-    print('*' * 20 + '\n')
+    print('*' * num_asterisks + '\n')
 
 
 def split_list(n_items, n, seed=None):

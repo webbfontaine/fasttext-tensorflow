@@ -1,20 +1,44 @@
+import os
+import sys
+import json
+import warnings
+from collections import Counter
+from shutil import rmtree
+
 import numpy as np
 from tqdm import tqdm
-from collections import Counter
-import pandas as pd
-from os.path import join, isfile
-from utils import validate
-import warnings
+
+from utils import hash_
 
 warnings.filterwarnings("ignore")
 
 
-def parse_txt(txt_path, debug_till_row=None, join_desc=False, return_max_len=False, fraction=1,
+def clean_directory(log_dir, remove_model=False):
+    for child_dir in os.listdir(log_dir):
+        dir_tmp = os.path.join(log_dir, child_dir)
+        if os.path.isdir(dir_tmp):
+            rmtree(dir_tmp)
+        if dir_tmp.endswith(".pb"):
+            if remove_model:
+                os.remove(dir_tmp)
+
+
+def preprocess_data(data_path, preprocessing_function):
+    with open(data_path) as infile:
+        data = infile.read().split('\n')
+        data = [preprocessing_function(text) for text in data]
+    prep_data_path = "{}_prep.txt".format(data_path.split(".txt")[0])
+    with open(prep_data_path, "w") as outfile:
+        outfile.write("\n").join(data)
+    return prep_data_path
+
+
+def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, fraction=1,
               label_prefix="__label__", seed=None):
     """
     *** to be optimized ***
     Read fasttext format txt file and create data and labels
-    :param txt_path: str, path to txt file of fasttext format
+    :param path: str, path to txt file of fasttext format
     :param debug_till_row: int, till which row to read the file
     :param join_desc: bool, join the words to form string
     :param return_max_len: bool, return tuple (descriptions, labels, max_len)
@@ -22,24 +46,24 @@ def parse_txt(txt_path, debug_till_row=None, join_desc=False, return_max_len=Fal
     :param label_prefix: str, prefix before the label
     :param seed: int
     """
-
-    with open(txt_path, "r") as infile:
-        if debug_till_row not in [None, -1]:
-            data = infile.read().split("\n")[:debug_till_row]
-        else:
-            data = infile.read().split("\n")
+    with open(path, "r") as infile:
+        data = infile.read().split("\n")[:-1]
+        if debug_till_row:
+            data = data[:debug_till_row]
 
     max_len = -1
-    assert 0 < fraction <= 1
+    if (fraction <= 0) or (fraction > 1):
+        raise ValueError("fraction should be in (0, 1]")
     if fraction < 1:
         if seed is not None:
             np.random.seed(seed)
-        size = int(round(fraction * len(data)))
-        inds = np.arange(len(data))
-        np.random.shuffle(inds)
-        data = [data[i] for i in inds[:size]]
 
-    descs, labels = [], []
+        size = int(round(fraction * len(data)))
+        indices = np.arange(len(data))
+        np.random.shuffle(indices)
+        data = [data[i] for i in indices[:size]]
+
+    descriptions, labels = [], []
     for row in data:
         row_splitted = row.split()
         num_words = len(row_splitted)
@@ -55,13 +79,13 @@ def parse_txt(txt_path, debug_till_row=None, join_desc=False, return_max_len=Fal
 
         labels.append(" ".join(tmp))
         if join_desc:
-            descs.append(" ".join(row_splitted[ind:]))
+            descriptions.append(" ".join(row_splitted[ind:]))
         else:
-            descs.append(row_splitted[ind:])
+            descriptions.append(row_splitted[ind:])
 
     if return_max_len:
-        return descs, labels, max_len
-    return descs, labels
+        return descriptions, labels, max_len
+    return descriptions, labels
 
 
 def get_all(splitted_string, word_ngram, sort_ngrams=False):
@@ -74,37 +98,44 @@ def get_all(splitted_string, word_ngram, sort_ngrams=False):
     for ngram in range(1, word_ngram + 1):
         for word_pos in range(len(splitted_string) - ngram + 1):
             if sort_ngrams:
-                yield ("_".join(sorted(splitted_string[word_pos:word_pos + ngram])))
+                yield "_".join(sorted(splitted_string[word_pos:word_pos + ngram]))
             else:
-                yield ("_".join(splitted_string[word_pos:word_pos + ngram]))
+                yield "_".join(splitted_string[word_pos:word_pos + ngram])
 
 
-def make_train_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, return_inverse=False):
+def make_word_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, return_inverse=False, show_progress=True,
+                    flush=False):
     """
     :param list_of_descriptions: list or array, list of descriptions
     :param word_n_grams: int
     :param sort_ngrams: bool, sort words of ngram before storing
     (ex: "used car" and "car used" both will be read as "car used")
-    :param return_inverse: bool, return tuple (train_vocab, inverse_vocab), where keys to inverse_vocab are the word ids
+    :param return_inverse: bool, return tuple (word_vocab, inverse_vocab), where keys to inverse_vocab are the word ids
+    :param show_progress: bool, show progress bar
+    :param flush: bool, flush after printing
     """
-    print("\n\nCreating train vocabulary ...")
-    cnt, id_cnt, train_vocab = 0, 1, {"__MEAN_EMBEDDING__": {"cnt": len(list_of_descriptions), "id": 0}}
-    for cur_desc_split in tqdm(list_of_descriptions):
+    cnt, id_cnt, word_vocab = 0, 1, {"__MEAN_EMBEDDING__": {"cnt": len(list_of_descriptions), "id": 0}}
+    disable_progressbar = not show_progress
+
+    if disable_progressbar:
+        print("Creating train vocabulary", flush=flush)
+    for cur_desc_split in tqdm(list_of_descriptions, disable=disable_progressbar, desc="Creating train vocabulary",
+                               file=sys.stdout):
         cur_len = len(cur_desc_split)
         for ng in get_all(cur_desc_split, min(cur_len, word_n_grams), sort_ngrams=sort_ngrams):
             cnt += 1
-            if ng in train_vocab:
-                train_vocab[ng]["cnt"] += 1
+            if ng in word_vocab:
+                word_vocab[ng]["cnt"] += 1
             else:
-                train_vocab[ng] = {"cnt": 1, "id": id_cnt}
+                word_vocab[ng] = {"cnt": 1, "id": id_cnt}
                 id_cnt += 1
-    print("Read {}m words and phrases".format(round(cnt / 1e6, 1)))
-    print("Number of unique words and phrases: {}".format(len(train_vocab)))
+    print("Read {}m words and phrases".format(round(cnt / 1e6, 1)), flush=flush)
+    print("Number of unique words and phrases: {}".format(len(word_vocab)), flush=flush)
 
     if return_inverse:
-        inverse_vocab = {v["id"]: {"cnt": v["cnt"], "phrase": k} for k, v in train_vocab.items()}
-        return train_vocab, inverse_vocab
-    return train_vocab
+        inverse_vocab = {v["id"]: {"cnt": v["cnt"], "phrase": k} for k, v in word_vocab.items()}
+        return word_vocab, inverse_vocab
+    return word_vocab
 
 
 def make_label_vocab(list_of_labels):
@@ -112,7 +143,7 @@ def make_label_vocab(list_of_labels):
     :param list_of_labels: list or array, list of labels
     """
     cnt = Counter(list_of_labels)
-    label_vocab = {}
+    label_vocab = dict()
     for i, label in enumerate(sorted(cnt.keys())):
         label_vocab[label] = {"id": i, "cnt": cnt[label]}
     return label_vocab
@@ -134,7 +165,6 @@ def next_batch(data, batch_size, shuffle=False):
     :param batch_size: int, the size of the batch
     :param shuffle: bool, shuffle data before selecting the batch
     """
-
     if len(data) <= batch_size:
         return [], data
     else:
@@ -143,83 +173,176 @@ def next_batch(data, batch_size, shuffle=False):
         return data[batch_size:], data[:batch_size]
 
 
-def preprocess_and_save(df, val_mask, text_field, label_field, preprocessing_function=None,
-                        additional_fields_and_preps={}, save_dir="./", postfix="", verbose=False, print_items=[]):
-    val = df[val_mask]
-    train = df[~val_mask]
-    if preprocessing_function is not None:
-        print_items.append("preprocessing descriptions")
-        train[text_field] = train[text_field].map(lambda s: preprocessing_function(str(s)))
-        train = train[train[text_field] != ""]
-        val[text_field] = val[text_field].map(lambda s: preprocessing_function(str(s)))
-
-    if verbose:
-        [print(i) for i in print_items]
-    train["label"] = train[label_field].apply(lambda x: "__label__{}".format(x))
-    val["label"] = val[label_field].apply(lambda x: "__label__{}".format(x))
-    use_cols = ["label", text_field] + list(additional_fields_and_preps.keys())
-    train_data = [" ".join(i) for i in train[use_cols].values]
-    val_data = [" ".join(i) for i in val[use_cols].values]
-    save_dir = validate(save_dir)
-    save_path_train = join(save_dir, "train{}.txt".format(postfix))
-    save_path_val = join(save_dir, "val{}.txt".format(postfix))
-    with open(save_path_train, "w+") as outfile:
-        outfile.write("\n".join(train_data))
-    with open(save_path_val, "w+") as outfile:
-        outfile.write("\n".join(val_data))
-    return save_path_train, save_path_val
+def to_fasttext_format(data, labels, save_path, label_prefix="__label__"):
+    ft_format = ["{}{} {}".format(label_prefix, l, d) for d, l in zip(data, labels)]
+    with open(save_path, "w+") as outfile:
+        outfile.write("\n".join(ft_format))
 
 
-def train_val_split_from_df(path_to_df, text_field, label_field, split_params={}, save_dir="./",
-                            preprocessing_function=None, additional_fields_and_preps={}, postfix="", verbose=False):
-    """
-    Create train and validation files from csv or parquet file with preprocessing
-    :param path_to_df: str, path to csv or parquet file
-    :param text_field: str, column of the dataframe in which is the text that should be classified
-    :param label_field: str, column of the dataframe in which is the label of the corresponding text
-    :param split_params: dict, input format: {"seed": int, default 17, "fraction": float, default: 0.1}
-    :param save_dir: str, directory to save the txt files
-    :param preprocessing_function: function, function to apply on text_field column
-    :param additional_fields_and_preps: dict. Dictionary in the following format
-    {field_name1: preprocessing_function1, field_name2: preprocessing_function2} to enable custom preprocessing for
-    different fields
-    :param postfix: str, postfix to add to train and validation files
-    :param verbose: bool
-    :return: tuple, the train and validation data paths
-    """
-    if path_to_df.endswith("parquet"):
-        df = pd.read_parquet(path_to_df)
+def get_max_words_with_ngrams(max_words, word_ngrams):
+    max_words_with_ng = 1
+    for ng in range(word_ngrams):
+        max_words_with_ng += max_words - ng
+    return max_words_with_ng
+
+
+def check_model_presence(log_dir, n_epochs=None):
+    if n_epochs:
+        return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
+               and (os.path.join(log_dir, "model_ep{}.pb".format(n_epochs)))
     else:
-        df = pd.read_csv(path_to_df)
+        return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
+               and (os.path.join(log_dir, "model_best.pb"))
 
-    print_items = []
 
-    if "seed" in split_params:
-        seed = split_params["seed"]
+def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, shuffle=False, show_progress=True,
+                    progress_desc=None):
+    num_datapoints = len(description_hashes)
+    indices = np.arange(num_datapoints)
+    rem_indices, batch_indices = next_batch(indices, batch_size, shuffle)
+
+    if num_datapoints <= batch_size:
+        show_progress = False
+
+    disable_progressbar = not show_progress
+    if disable_progressbar:
+        if progress_desc:
+            print(progress_desc)
+    progress_bar = tqdm(total=int(np.ceil(num_datapoints / batch_size)), disable=disable_progressbar,
+                        desc=progress_desc)
+
+    while len(batch_indices) > 0:
+        batch_hashes = [description_hashes[i] for i in batch_indices]
+        batch_phrase_indices = [cache[_hash]["i"] for _hash in batch_hashes]
+        batch_phrase_weights = [cache[_hash]["w"] for _hash in batch_hashes]
+        batch_labels = [label_vocab[labels[index]]["id"] for index in batch_indices]
+
+        cur_lens = np.array([len(phrase_indices) for phrase_indices in batch_phrase_indices])
+        mx_len = max(cur_lens)
+        to_pad = mx_len - cur_lens
+
+        batch = [i + [0 for _ in range(pad)] for i, pad in zip(batch_phrase_indices, to_pad)]
+        batch_weights = [i + [0 for _ in range(pad)] for i, pad in zip(batch_phrase_weights, to_pad)]
+
+        rem_indices, batch_indices = next_batch(rem_indices, batch_size, shuffle)
+        progress_bar.update()
+        yield batch, np.expand_dims(batch_weights, axis=2), batch_labels
+
+    progress_bar.close()
+
+
+def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_ngrams, cache=None,
+               is_test_data=False, show_progress=True, progress_desc=None, print_postfix="\n", flush=False):
+
+    if cache is None:
+        cache = dict()
+
+    num_labels = len(label_vocab)
+    description_hashes, labels2 = [], []
+
+    descriptions_thrown, labels_thrown = 0, 0
+    disable_progressbar = not show_progress
+    if disable_progressbar:
+        if progress_desc:
+            print(progress_desc, flush=flush)
+    for description, label in \
+            zip(tqdm(descriptions, disable=disable_progressbar, desc=progress_desc, file=sys.stdout), labels):
+
+        phrase_indices = [0] + [word_vocab[phrase]["id"] for phrase in get_all(description, word_ngrams, sort_ngrams) if
+                                phrase in word_vocab]
+        if len(phrase_indices) == 1:
+            descriptions_thrown += 1
+            continue
+
+        if label not in label_vocab:
+            if is_test_data:
+                labels_thrown += 1
+                continue
+
+        tmp_hash = hash_(str(description))
+        if tmp_hash not in cache:
+            desc_weights = [1. / len(phrase_indices) for _ in range(len(phrase_indices))]
+            cache[tmp_hash] = {
+                "i": phrase_indices,
+                "w": desc_weights
+            }
+        labels2.append(label)
+        description_hashes.append(tmp_hash)
+
+    if labels_thrown > 0:
+        print("{} datapoints thrown because of empty description".format(descriptions_thrown), flush=flush)
+        print("{} datapoints thrown because of label {}".format(labels_thrown, print_postfix), flush=flush)
     else:
-        print_items.append("no 'seed' parameter specified in split_params, the default is 17")
-        seed = 17
-    np.random.seed(seed)
-    if "fraction" in split_params:
-        f = split_params["fraction"]
-        assert type(f) == float
+        print("{} datapoints thrown because of empty description {}".format(descriptions_thrown, print_postfix),
+              flush=flush)
+    return description_hashes, labels2, cache, num_labels
+
+
+def get_word_label_vocabs(train_descriptions, train_labels, word_ngrams, min_word_count, sort_ngrams,
+                          cache_dir, force, show_progress=False, flush=False):
+    label_dict_path = os.path.join(cache_dir, "label_dict.json")
+    word_id_path = os.path.join(cache_dir, "word_id.json")
+
+    if os.path.isfile(label_dict_path) and os.path.isfile(word_id_path) and not force:
+        print("\n*** using cached dicts ***", flush=flush)
+        using_cached = True
+        with open(label_dict_path, "r") as infile:
+            label_vocab = json.load(infile)
+        with open(word_id_path, "r") as infile:
+            word_vocab = json.load(infile)
+        tmp_cnt = sum([i["cnt"] for i in word_vocab.values()])
+        print("read {}m words and phrases".format(round(tmp_cnt / 1e6, 1)), flush=flush)
+        print("number of unique words and phrases: {}\n".format(len(word_vocab)), flush=flush)
     else:
-        print_items.append("no 'fraction' parameter specified in split_params, the default is 0.1")
-        f = 0.1
+        using_cached = False
+        word_vocab = make_word_vocab(train_descriptions, word_ngrams, sort_ngrams=sort_ngrams,
+                                     show_progress=show_progress, flush=flush)
+        label_vocab = make_label_vocab(train_labels)
 
-    for added_field, prep_f in additional_fields_and_preps.items():
-        if df[added_field].dtype != "object":
-            df[added_field] = df[added_field].astype(str)
-        if prep_f:
-            df[added_field] = df[added_field].map(prep_f)
-        df[text_field] = df[text_field] + " " + df[added_field]
+    if min_word_count > 1:
+        tmp_cnt = 1
+        word_vocab_thresholded = dict()
+        for k, v in sorted(word_vocab.items(), key=lambda t: t[0]):
+            if v["cnt"] >= min_word_count:
+                v["id"] = tmp_cnt
+                word_vocab_thresholded[k] = v
+                tmp_cnt += 1
 
-    val_mask = np.random.choice([True, False], size=len(df),  p=[f, 1 - f])
+        word_vocab = word_vocab_thresholded.copy()
+        del word_vocab_thresholded
 
-    return preprocess_and_save(df, val_mask, text_field, label_field, preprocessing_function,
-                               additional_fields_and_preps, save_dir, postfix, verbose, print_items)
+        print("Number of unique words and phrases after thresholding: {}".format(len(word_vocab)), flush=flush)
+
+    print("\nNumber of labels in train: {}".format(len(set(label_vocab.keys()))), flush=flush)
+
+    if not using_cached:
+        with open(label_dict_path, "w+") as outfile:
+            json.dump(label_vocab, outfile)
+        with open(word_id_path, "w+") as outfile:
+            json.dump(word_vocab, outfile)
+    return word_vocab, label_vocab
 
 
-def check_model_presence(log_dir, n_epochs):
-    return isfile(join(log_dir, "results.json")) and (join(log_dir, "model_params.json")) and \
-           (join(log_dir, "model_ep{}.pb".format(n_epochs)))
+def get_accuracy_log_dir(process_output, k, verbose):
+    for line in iter(process_output.stdout.readline, b""):
+        line = line.rstrip().decode("utf-8")
+        if "stored at" in line:
+            log_dir_line = line
+
+        if "accuracy" in line:
+            line_split = line.split()
+            if "test" in line:
+                top_1_accuracy = float(line_split[-4][:-1])
+                top_k_accuracy = float(line_split[-1])
+            else:
+                if str(1) in line.split():
+                    top_1_accuracy = float(line_split[-1])
+                if str(k) in line.split():
+                    top_k_accuracy = float(line_split[-1])
+
+        if verbose:
+            print(line)
+    process_output.stdout.close()
+
+    log_dir = log_dir_line.split("at ")[-1]
+    return top_1_accuracy, top_k_accuracy, log_dir
