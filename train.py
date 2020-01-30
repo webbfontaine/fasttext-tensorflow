@@ -1,6 +1,6 @@
+import os
 import json
 import time
-import os
 import tracemalloc
 
 import tensorflow as tf
@@ -78,7 +78,7 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
     with tf.device(device):
         with tf.Session(config=config) as sess:
             input_ph = tf.placeholder(tf.int32, shape=[None, None], name="input")
-            weights_ph = tf.placeholder(tf.float32, shape=[None, None, 1], name="input_weights")
+            weights_ph = tf.placeholder(tf.float32, shape=[None, None], name="input_weights")
             labels_ph = tf.placeholder(tf.int32, shape=[None], name="label")
             learning_rate_ph = tf.placeholder_with_default(learning_rate, shape=[], name="learning_rate")
             dropout_drop_rate_ph = tf.placeholder_with_default(0., shape=[], name="dropout_rate")
@@ -87,12 +87,12 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
             tf.set_random_seed(seed)
 
             with tf.name_scope("embeddings"):
-                look_up_table = tf.Variable(tf.random_uniform([num_words_in_train, embedding_dim]),
+                look_up_table = tf.Variable(tf.random.uniform([num_words_in_train, embedding_dim]),
                                             name="embedding_matrix")
 
             with tf.name_scope("mean_sentece_vector"):
                 gathered_vectors = tf.gather(look_up_table, input_ph)
-                weights_broadcasted = tf.tile(weights_ph, tf.stack([1, 1, embedding_dim]))
+                weights_broadcasted = tf.expand_dims(weights_ph, axis=2)
                 mean_emb = tf.reduce_sum(tf.multiply(weights_broadcasted, gathered_vectors), axis=1,
                                          name="sentence_embedding")
             if use_batch_norm:

@@ -22,7 +22,7 @@ def freeze_save_graph(sess, log_dir, name, output_node):
 
     variable_graph_def = sess.graph.as_graph_def()
     optimized_net = graph_util.convert_variables_to_constants(sess, variable_graph_def, [output_node])
-    tf.train.write_graph(optimized_net, log_dir, name, False)
+    tf.io.write_graph(optimized_net, log_dir, name, False)
 
 
 def load_graph(graph_path, return_elements=None):

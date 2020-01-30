@@ -6,6 +6,7 @@ import tracemalloc
 from sys import exit
 
 import numpy as np
+import tensorflow.compat.v1.logging as logging
 
 from fasttext_utils import (
     parse_txt,
@@ -25,6 +26,7 @@ from train import (
     get_accuracy,
 )
 
+logging.set_verbosity(logging.ERROR)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 
@@ -60,7 +62,7 @@ def main():
     parser.add_argument("-ck", "--compare_top_k", type=int, default=0,
                         help="compare top k accuracies for determining the best model")
     parser.add_argument("-sm", "--save_all_models", type=int, default=0, help="save model after each epoch")
-    parser.add_argument("-ut", "--use_test", type=int, default=0, help="evaluate on test data")
+    parser.add_argument("-ut", "--use_test", type=int, default=1, help="evaluate on test data")
     parser.add_argument("-gpu", "--use_gpu", type=int, default=0, help="use gpu for training")
     parser.add_argument("-gpu_fr", "--gpu_fraction", type=float, default=0.5, help="what fraction of gpu to allocate")
     parser.add_argument("-cd", "--cache_dir", type=str, help="cache directory", default="./cache/")
@@ -85,8 +87,10 @@ def main():
     progress_bar = bool(args.progress_bar)
     flush = bool(args.flush)
 
+    use_test = False
     if args.test_path:
-        use_test = True
+        if bool(args.use_test):
+            use_test = True
 
     print("\n\nTraining with arguments:\n{}\n".format(args))
 

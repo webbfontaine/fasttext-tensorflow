@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import warnings
 from collections import Counter
 from shutil import rmtree
 
@@ -9,8 +8,6 @@ import numpy as np
 from tqdm import tqdm
 
 from utils import hash_
-
-warnings.filterwarnings("ignore")
 
 
 def clean_directory(log_dir, remove_model=False):
@@ -209,7 +206,7 @@ def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, 
         if progress_desc:
             print(progress_desc)
     progress_bar = tqdm(total=int(np.ceil(num_datapoints / batch_size)), disable=disable_progressbar,
-                        desc=progress_desc)
+                        desc=progress_desc, file=sys.stdout)
 
     while len(batch_indices) > 0:
         batch_hashes = [description_hashes[i] for i in batch_indices]
@@ -226,18 +223,16 @@ def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, 
 
         rem_indices, batch_indices = next_batch(rem_indices, batch_size, shuffle)
         progress_bar.update()
-        yield batch, np.expand_dims(batch_weights, axis=2), batch_labels
+        yield batch, batch_weights, batch_labels
 
     progress_bar.close()
 
 
 def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_ngrams, cache=None,
                is_test_data=False, show_progress=True, progress_desc=None, print_postfix="\n", flush=False):
-
     if cache is None:
         cache = dict()
 
-    num_labels = len(label_vocab)
     description_hashes, labels2 = [], []
 
     descriptions_thrown, labels_thrown = 0, 0
@@ -275,7 +270,7 @@ def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_
     else:
         print("{} datapoints thrown because of empty description {}".format(descriptions_thrown, print_postfix),
               flush=flush)
-    return description_hashes, labels2, cache, num_labels
+    return description_hashes, labels2, cache
 
 
 def get_word_label_vocabs(train_descriptions, train_labels, word_ngrams, min_word_count, sort_ngrams,
@@ -300,7 +295,7 @@ def get_word_label_vocabs(train_descriptions, train_labels, word_ngrams, min_wor
         label_vocab = make_label_vocab(train_labels)
 
     if min_word_count > 1:
-        tmp_cnt = 1
+        tmp_cnt = 0
         word_vocab_thresholded = dict()
         for k, v in sorted(word_vocab.items(), key=lambda t: t[0]):
             if v["cnt"] >= min_word_count:
