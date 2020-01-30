@@ -14,13 +14,13 @@ ngrams which appear in the data more than equal than the `min_word_count` parame
 There are 2 ways to use the code. 
 From terminal:
 ``` bash
-python3 main.py --train_path train.txt --validation_path val.txt --learning_rate 0.3 --n_epochs 5 --use_gpu 1 --gpu_fraction 0.9 --batch_size 1024 --use_validation 1 --min_word_count 5
+python3 main.py --train_path train.txt --test_path val.txt --learning_rate 0.3 --num_epochs 5 --use_gpu 1 --gpu_fraction 0.9 --batch_size 1024 --min_word_count 5
 ```
 
 or from jupyter notebook: 
 ``` python
 from fasttext_model import train_supervised
-ft_model = train_supervised(train_data_path="train.txt", val_data_path="val.txt", use_gpu=True, hyperparams={"learning_rate": 0.3, "n_epochs":5, "gpu_fraction": 0.9, "batch_size":1024, "min_word_count": 5}) 
+ft_model = train_supervised(train_path="train.txt", test_path="val.txt", use_gpu=True, hyperparams={"learning_rate": 0.3, "num_epochs":5, "gpu_fraction": 0.9, "batch_size":1024, "min_word_count": 5}) 
 ```
 
 The full list of hyperparameters with their explanations can be found `main.py`
