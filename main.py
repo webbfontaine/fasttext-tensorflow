@@ -80,7 +80,6 @@ def main():
     use_batch_norm = bool(args.use_batch_norm)
     compare_top_k = bool(args.compare_top_k)
     save_all_models = bool(args.save_all_models)
-    use_test = bool(args.use_test)
     sort_ngrams = bool(args.sort_ngrams)
     use_gpu = bool(args.use_gpu)
     force = bool(args.force)
@@ -145,7 +144,7 @@ def main():
     if os.path.exists(train_history_path):
         with open(train_history_path) as infile:
             train_history = json.load(infile)
-        if hyperparams_hashed in train_history and check_model_presence(log_dir, args.num_epochs):
+        if hyperparams_hashed in train_history and check_model_presence(log_dir):
             if not force:
                 if args.test_path:
                     get_accuracy(log_dir, train_params, train_history_path, hyperparams_hashed,

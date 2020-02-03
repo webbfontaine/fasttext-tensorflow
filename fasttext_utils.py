@@ -11,6 +11,12 @@ from utils import hash_
 
 
 def clean_directory(log_dir, remove_model=False):
+    """
+    Remove files from the directory
+    :param log_dir: str
+    :param remove_model: bool, remove pb files from previous trainings
+    :return: None
+    """
     for child_dir in os.listdir(log_dir):
         dir_tmp = os.path.join(log_dir, child_dir)
         if os.path.isdir(dir_tmp):
@@ -21,6 +27,12 @@ def clean_directory(log_dir, remove_model=False):
 
 
 def preprocess_data(data_path, preprocessing_function):
+    """
+    Pre-process data and save in another file
+    :param data_path: str
+    :param preprocessing_function: function
+    :return: str, path to the pre-processed file
+    """
     with open(data_path) as infile:
         data = infile.read().split('\n')
         data = [preprocessing_function(text) for text in data]
@@ -33,7 +45,6 @@ def preprocess_data(data_path, preprocessing_function):
 def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, fraction=1,
               label_prefix="__label__", seed=None):
     """
-    *** to be optimized ***
     Read fasttext format txt file and create data and labels
     :param path: str, path to txt file of fasttext format
     :param debug_till_row: int, till which row to read the file
@@ -42,6 +53,7 @@ def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, 
     :param fraction: float, what fraction of data to use, if < 1, a random fraction will be chosen
     :param label_prefix: str, prefix before the label
     :param seed: int
+    :return: tuple, (data, labels) or (data, labels, max_len) if return_max_len is True
     """
     with open(path, "r") as infile:
         data = infile.read().split("\n")[:-1]
@@ -86,11 +98,13 @@ def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, 
 
 
 def get_all(splitted_string, word_ngram, sort_ngrams=False):
-    """Get all word ngrams from the splitted string
+    """
+    Get all word ngrams from the splitted string
     :param splitted_string: list or array, splitted text
     :param word_ngram: int
     :param sort_ngrams: bool, sort words of ngram before storing
     (ex: "used car" and "car used" both will be read as "car used")
+    :return: generator, all words and n-grams
     """
     for ngram in range(1, word_ngram + 1):
         for word_pos in range(len(splitted_string) - ngram + 1):
@@ -103,6 +117,7 @@ def get_all(splitted_string, word_ngram, sort_ngrams=False):
 def make_word_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, return_inverse=False, show_progress=True,
                     flush=False):
     """
+    Create vocabulary to index words and n-grams
     :param list_of_descriptions: list or array, list of descriptions
     :param word_n_grams: int
     :param sort_ngrams: bool, sort words of ngram before storing
@@ -110,6 +125,7 @@ def make_word_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, ret
     :param return_inverse: bool, return tuple (word_vocab, inverse_vocab), where keys to inverse_vocab are the word ids
     :param show_progress: bool, show progress bar
     :param flush: bool, flush after printing
+    :return: dict or tuple if return_inverse is True, word_vocab or (word_vocab, inverse_word_vocab)
     """
     cnt, id_cnt, word_vocab = 0, 1, {"__MEAN_EMBEDDING__": {"cnt": len(list_of_descriptions), "id": 0}}
     disable_progressbar = not show_progress
@@ -137,7 +153,9 @@ def make_word_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, ret
 
 def make_label_vocab(list_of_labels):
     """
+    Create vocabulary to index labels
     :param list_of_labels: list or array, list of labels
+    :return: dict
     """
     cnt = Counter(list_of_labels)
     label_vocab = dict()
@@ -148,8 +166,10 @@ def make_label_vocab(list_of_labels):
 
 def construct_label(index, num_classes):
     """
+    Create one-one label for the given index
     :param index: int, index of the class
     :param num_classes: int, number of classes
+    :return: np.array, the one-hot label
     """
     label = np.zeros(num_classes)
     label[index] = 1
@@ -161,6 +181,7 @@ def next_batch(data, batch_size, shuffle=False):
     :param data: list or array
     :param batch_size: int, the size of the batch
     :param shuffle: bool, shuffle data before selecting the batch
+    :return: tuple, (remaining data, batch data)
     """
     if len(data) <= batch_size:
         return [], data
@@ -171,22 +192,42 @@ def next_batch(data, batch_size, shuffle=False):
 
 
 def to_fasttext_format(data, labels, save_path, label_prefix="__label__"):
+    """
+    Save data with fasttext format
+    :param data: list
+    :param labels: list
+    :param save_path: str
+    :param label_prefix: str, prefix of the label
+    :return: None
+    """
     ft_format = ["{}{} {}".format(label_prefix, l, d) for d, l in zip(data, labels)]
     with open(save_path, "w+") as outfile:
         outfile.write("\n".join(ft_format))
 
 
 def get_max_words_with_ngrams(max_words, word_ngrams):
+    """
+    Calculate the length of the longest possible sentence
+    :param max_words: int, the length of the longest sentence
+    :param word_ngrams: int
+    :return: int, the length of the longest sentence with word n-grams
+    """
     max_words_with_ng = 1
     for ng in range(word_ngrams):
         max_words_with_ng += max_words - ng
     return max_words_with_ng
 
 
-def check_model_presence(log_dir, n_epochs=None):
-    if n_epochs:
+def check_model_presence(log_dir, epoch=None):
+    """
+    Check if the model exists in the given directory
+    :param log_dir: str, the directory where the model is saved
+    :param epoch: int, if None will take model_best, else will check for the specified epoch
+    :return: bool, True, if the model exists, otherwise False
+    """
+    if epoch:
         return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
-               and (os.path.join(log_dir, "model_ep{}.pb".format(n_epochs)))
+               and (os.path.join(log_dir, "model_ep{}.pb".format(epoch)))
     else:
         return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
                and (os.path.join(log_dir, "model_best.pb"))
@@ -194,6 +235,18 @@ def check_model_presence(log_dir, n_epochs=None):
 
 def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, shuffle=False, show_progress=True,
                     progress_desc=None):
+    """
+    Construct and yield word indices, weights and labels
+    :param description_hashes: list, hashed strings of the input data
+    :param labels: list
+    :param batch_size: int
+    :param label_vocab: dict, mapping of labels to their indices
+    :param cache: dict
+    :param shuffle: bool, shuffle data before batching
+    :param show_progress: bool, show progress bar
+    :param progress_desc: str, description for progress bar
+    :return: tuple, word indices, weights and labels
+    """
     num_datapoints = len(description_hashes)
     indices = np.arange(num_datapoints)
     rem_indices, batch_indices = next_batch(indices, batch_size, shuffle)
@@ -230,6 +283,22 @@ def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, 
 
 def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_ngrams, cache=None,
                is_test_data=False, show_progress=True, progress_desc=None, print_postfix="\n", flush=False):
+    """
+    Cache data in order not to do repetitive work
+    :param descriptions: list, hashed strings of the input data
+    :param labels: list
+    :param word_vocab: dict, mapping of words and n-grams to their indices
+    :param label_vocab: dict, mapping of labels to their indices
+    :param word_ngrams: int
+    :param sort_ngrams: bool
+    :param cache: dict
+    :param is_test_data: bool
+    :param show_progress: bool, show progress bar
+    :param progress_desc: str, description for progress bar
+    :param print_postfix: str
+    :param flush: bool, flush after printing
+    :return: tuple, (description hashes, labels, cache)
+    """
     if cache is None:
         cache = dict()
 
@@ -273,42 +342,52 @@ def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_
     return description_hashes, labels2, cache
 
 
-def get_word_label_vocabs(train_descriptions, train_labels, word_ngrams, min_word_count, sort_ngrams,
+def get_word_label_vocabs(descriptions, labels, word_ngrams, min_word_count, sort_ngrams,
                           cache_dir, force, show_progress=False, flush=False):
+    """
+    Cache data in order not to do repetitive work
+    :param descriptions: list, hashed strings of the input data
+    :param labels: list
+    :param word_ngrams: int
+    :param min_word_count: int, threshold on minimum occurance on words and n-grams
+    :param sort_ngrams: bool
+    :param cache_dir: str
+    :param force: bool
+    :param show_progress: bool, show progress bar
+    :param flush: bool, flush after printing
+    :return: tuple, word indices, weights and labels
+    """
     label_dict_path = os.path.join(cache_dir, "label_dict.json")
     word_id_path = os.path.join(cache_dir, "word_id.json")
 
     if os.path.isfile(label_dict_path) and os.path.isfile(word_id_path) and not force:
-        print("\n*** using cached dicts ***", flush=flush)
+        print("\n*** Using cached dicts ***", flush=flush)
         using_cached = True
         with open(label_dict_path, "r") as infile:
             label_vocab = json.load(infile)
         with open(word_id_path, "r") as infile:
             word_vocab = json.load(infile)
         tmp_cnt = sum([i["cnt"] for i in word_vocab.values()])
-        print("read {}m words and phrases".format(round(tmp_cnt / 1e6, 1)), flush=flush)
-        print("number of unique words and phrases: {}\n".format(len(word_vocab)), flush=flush)
+        print("Read {}m words and phrases".format(round(tmp_cnt / 1e6, 1)), flush=flush)
+        print("Number of unique words and phrases: {}\n".format(len(word_vocab)), flush=flush)
     else:
         using_cached = False
-        word_vocab = make_word_vocab(train_descriptions, word_ngrams, sort_ngrams=sort_ngrams,
+        word_vocab = make_word_vocab(descriptions, word_ngrams, sort_ngrams=sort_ngrams,
                                      show_progress=show_progress, flush=flush)
-        label_vocab = make_label_vocab(train_labels)
+        label_vocab = make_label_vocab(labels)
 
     if min_word_count > 1:
-        tmp_cnt = 0
         word_vocab_thresholded = dict()
-        for k, v in sorted(word_vocab.items(), key=lambda t: t[0]):
+        new_cnt = 0
+        for k, v in word_vocab.items():
             if v["cnt"] >= min_word_count:
-                v["id"] = tmp_cnt
+                v["id"] = new_cnt
                 word_vocab_thresholded[k] = v
-                tmp_cnt += 1
-
-        word_vocab = word_vocab_thresholded.copy()
-        del word_vocab_thresholded
+                new_cnt += 1
+        word_vocab = word_vocab_thresholded
 
         print("Number of unique words and phrases after thresholding: {}".format(len(word_vocab)), flush=flush)
-
-    print("\nNumber of labels in train: {}".format(len(set(label_vocab.keys()))), flush=flush)
+    print("Number of unique labels in train: {}".format(len(label_vocab)), flush=flush)
 
     if not using_cached:
         with open(label_dict_path, "w+") as outfile:
@@ -319,6 +398,13 @@ def get_word_label_vocabs(train_descriptions, train_labels, word_ngrams, min_wor
 
 
 def get_accuracy_log_dir(process_output, k, verbose):
+    """
+    Get accuracy from printed logs
+    :param process_output: the output of Popen
+    :param k: int, top k parameter
+    :param verbose: bool
+    :return: tuple, (top 1 accuracy, top k accuracy, model directory)
+    """
     for line in iter(process_output.stdout.readline, b""):
         line = line.rstrip().decode("utf-8")
         if "stored at" in line:

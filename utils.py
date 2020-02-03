@@ -48,12 +48,6 @@ def hash_xor_data(list_of_texts):
     return str(init_hash)
 
 
-def hash_function(f):
-    if f is None:
-        return "no_prep"
-    return "{}_{}".format(f.__code__.co_name, hash_(f.__code__.co_code.decode('utf-16')))
-
-
 def get_cache_hash(list_of_texts, data_specific_params):
     data_hashed = "".join([str(v) for k, v in sorted(data_specific_params.items(), key=lambda t: t[0])])
     hash_xor = hash_xor_data(list_of_texts=list_of_texts)
@@ -76,21 +70,3 @@ def copy_all(list_of_paths, destination_path):
 
 def percent_array(x, multiplier=100, precision=2):
     return np.round(multiplier * np.mean(x), precision)
-
-
-def dummy_print(x, num_asterisks=20):
-    print('\n' + '*' * num_asterisks)
-    print(x)
-    print('*' * num_asterisks + '\n')
-
-
-def split_list(n_items, n, seed=None):
-    if seed:
-        np.random.seed(seed)
-    indices = np.arange(n_items)
-    np.random.shuffle(indices)
-    folds = np.array_split(indices, n)
-    for fold in folds:
-        fold_mask = np.zeros(n_items)
-        fold_mask[fold] = 1
-        yield fold_mask.astype(bool)

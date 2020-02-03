@@ -96,7 +96,7 @@ class FastTextModel(object):
                     load_graph(model_path, get_list)
 
             self._sess = tf.Session(graph=self._graph, config=config)
-        self.dim = self.get_dimension()
+        self._dim = self.get_dimension()
         _ = self.predict([""] * 3, batch_size=3, show_progress=False)  # warm up
 
     def __del__(self):
@@ -263,8 +263,6 @@ class FastTextModel(object):
                 batch.append(test_desc_inds)
                 batch_weights.append(test_desc_weights)
             rem_inds, batch_inds = next_batch(rem_inds, batch_size)
-            batch_weights = np.expand_dims(batch_weights, 2)
-            batch = np.array(batch)
 
             progress_bar.update()
             yield batch, batch_weights

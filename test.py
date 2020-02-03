@@ -11,7 +11,6 @@ from fasttext_utils import (
     parse_txt,
     next_batch,
     get_all,
-    construct_label,
 )
 from utils import load_graph
 
@@ -31,8 +30,8 @@ def main():
     args = parser.parse_args()
 
     model_dir = args.model_dir
-    model_params_path = os.path.join(model_dir, 'model_params.json')
-    model_path = os.path.join(model_dir, 'model_best.pb')
+    model_params_path = os.path.join(model_dir, "model_params.json")
+    model_path = os.path.join(model_dir, "model_best.pb")
     test_path = args.test_path
     batch_size = args.batch_size
     hand_check = args.hand_check
@@ -50,42 +49,37 @@ def main():
         config = tf.ConfigProto(allow_soft_placement=True)
 
     num_thrown_for_label = 0
-    with open(model_params_path, 'r') as infile:
+    with open(model_params_path, "r") as infile:
         model_params = json.load(infile)
-    if os.path.isfile(model_params['label_dict_path']):
-        with open(model_params['label_dict_path'], 'r') as infile:
+    if os.path.isfile(model_params["label_dict_path"]):
+        with open(model_params["label_dict_path"], "r") as infile:
             label_vocab = json.load(infile)
     else:
-        with open(os.path.join(model_dir, "label_dict.json"), 'r') as infile:
+        with open(os.path.join(model_dir, "label_dict.json"), "r") as infile:
             label_vocab = json.load(infile)
-    if os.path.isfile(model_params['word_id_path']):
-        with open(model_params['word_id_path'], 'r') as infile:
+    if os.path.isfile(model_params["word_id_path"]):
+        with open(model_params["word_id_path"], "r") as infile:
             train_vocab = json.load(infile)
     else:
-        with open(os.path.join(model_dir, "word_id.json"), 'r') as infile:
+        with open(os.path.join(model_dir, "word_id.json"), "r") as infile:
             train_vocab = json.load(infile)
-    word_ngrams = model_params['word_ngrams']
-    sort_ngrams = model_params['sort_ngrams']
+    word_ngrams = model_params["word_ngrams"]
+    sort_ngrams = model_params["sort_ngrams"]
 
-    num_labels = len(label_vocab)
-
-    labels_lookup = {}
-    labels_lookup_reverse = {}
+    labels_vocab_inverse = {}
 
     for label, label_id in label_vocab.items():
-        label_one_hot = np.expand_dims(construct_label(label_vocab[label]['id'], num_labels), axis=0)
-        labels_lookup[label] = label_one_hot
-        labels_lookup_reverse[label_vocab[label]['id']] = label
+        labels_vocab_inverse[label_vocab[label]["id"]] = label
 
     with tf.device(device):
         with tf.Session(config=config) as sess:
-            run_arg = load_graph(model_path, ['input:0', 'input_weights:0', 'prediction:0'])
+            run_arg = load_graph(model_path, ["input:0", "input_weights:0", "prediction:0"])
             if hand_check:
                 while True:
-                    query_desc = input('Enter the description: ')
+                    query_desc = input("Enter the description: ")
                     label = query_desc[9:19]
                     query_desc = query_desc[20:]
-                    test_desc_inds = np.expand_dims([0] + [train_vocab[phrase]['id'] for phrase in
+                    test_desc_inds = np.expand_dims([0] + [train_vocab[phrase]["id"] for phrase in
                                                            get_all(query_desc.split(), word_ngrams, sort_ngrams) if
                                                            phrase in train_vocab], axis=0)
 
@@ -93,7 +87,7 @@ def main():
                     test_desc_weights[0][:len(test_desc_inds[0])] = 1. / len(test_desc_inds[0])
 
                     if label not in label_vocab:
-                        print('new label')
+                        print("new label")
                         continue
 
                     probs = np.squeeze(sess.run(run_arg[-1], feed_dict={run_arg[0]: test_desc_inds,
@@ -101,12 +95,12 @@ def main():
 
                     max_ind = np.argmax(probs)
                     max_prob = probs[max_ind]
-                    pred_label = labels_lookup_reverse[max_ind]
+                    pred_label = labels_vocab_inverse[max_ind]
                     print(pred_label == label, pred_label, max_prob)
             else:
                 test_descriptions, test_labels = parse_txt(test_path, join_desc=True)
                 test_inds = np.arange(len(test_descriptions))
-                print('The total number of test datapoints: {}'.format(len(test_descriptions)))
+                print("The total number of test datapoints: {}".format(len(test_descriptions)))
 
                 pbar = tqdm(total=int(np.ceil(len(test_descriptions) / batch_size)))
                 rem_inds, batch_inds = next_batch(test_inds, batch_size)
@@ -128,10 +122,10 @@ def main():
                         num_max_words += max_words - ng
 
                     for test_desc, test_label in zip(batch_descriptions, batch_labels):
-                        if test_label not in labels_lookup:
+                        if test_label not in label_vocab:
                             num_thrown_for_label += 1
                             continue
-                        init_test_inds = [0] + [train_vocab[phrase]['id'] for phrase in
+                        init_test_inds = [0] + [train_vocab[phrase]["id"] for phrase in
                                                 get_all(test_desc.split(), word_ngrams, sort_ngrams) if phrase in
                                                 train_vocab]
 
@@ -143,7 +137,7 @@ def main():
 
                         batch.append(test_desc_inds)
                         batch_weights.append(test_desc_weights)
-                        batch_labels2.append(label_vocab[test_label]['id'])
+                        batch_labels2.append(label_vocab[test_label]["id"])
 
                     probs = sess.run(run_arg[-1], feed_dict={run_arg[0]: batch,
                                                              run_arg[1]: batch_weights})
@@ -155,13 +149,13 @@ def main():
                     pbar.update()
                 pbar.close()
 
-                print('{} datapoint thrown because of label'.format(num_thrown_for_label))
-                print('Number of test datapoints after cleaning: {}'.format(len(test_descriptions) -
+                print("{} datapoint thrown because of label".format(num_thrown_for_label))
+                print("Number of test datapoints after cleaning: {}".format(len(test_descriptions) -
                                                                             num_thrown_for_label))
-                print('Number of unique labels in test after cleaning: {}'.format(len(set(test_labels))))
-                print('Accuracy: {}'.format(round(100 * accuracy_top_1 / len(test_descriptions), 2)))
-                print('Accuracy top {}: {}'.format(k, round(100 * accuracy_top_k / len(test_descriptions), 2)))
+                print("Number of unique labels in test after cleaning: {}".format(len(set(test_labels))))
+                print("Accuracy: {}".format(round(100 * accuracy_top_1 / len(test_descriptions), 2)))
+                print("Accuracy top {}: {}".format(k, round(100 * accuracy_top_k / len(test_descriptions), 2)))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
