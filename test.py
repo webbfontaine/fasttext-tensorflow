@@ -57,12 +57,12 @@ def main():
     else:
         with open(os.path.join(model_dir, "label_dict.json"), "r") as infile:
             label_vocab = json.load(infile)
-    if os.path.isfile(model_params["word_id_path"]):
-        with open(model_params["word_id_path"], "r") as infile:
-            train_vocab = json.load(infile)
+    if os.path.isfile(model_params["word_dict_path"]):
+        with open(model_params["word_dict_path"], "r") as infile:
+            word_id = json.load(infile)
     else:
         with open(os.path.join(model_dir, "word_id.json"), "r") as infile:
-            train_vocab = json.load(infile)
+            word_id = json.load(infile)
     word_ngrams = model_params["word_ngrams"]
     sort_ngrams = model_params["sort_ngrams"]
 
@@ -79,9 +79,9 @@ def main():
                     query_desc = input("Enter the description: ")
                     label = query_desc[9:19]
                     query_desc = query_desc[20:]
-                    test_desc_inds = np.expand_dims([0] + [train_vocab[phrase]["id"] for phrase in
+                    test_desc_inds = np.expand_dims([0] + [word_id[phrase]["id"] for phrase in
                                                            get_all(query_desc.split(), word_ngrams, sort_ngrams) if
-                                                           phrase in train_vocab], axis=0)
+                                                           phrase in word_id], axis=0)
 
                     test_desc_weights = np.zeros_like(test_desc_inds, dtype=np.float32)
                     test_desc_weights[0][:len(test_desc_inds[0])] = 1. / len(test_desc_inds[0])
@@ -125,9 +125,9 @@ def main():
                         if test_label not in label_vocab:
                             num_thrown_for_label += 1
                             continue
-                        init_test_inds = [0] + [train_vocab[phrase]["id"] for phrase in
-                                                get_all(test_desc.split(), word_ngrams, sort_ngrams) if phrase in
-                                                train_vocab]
+                        init_test_inds = [0] + [word_id[phrase]["id"] for phrase in
+                                                get_all(test_desc.split(), word_ngrams, sort_ngrams)
+                                                if phrase in word_id]
 
                         cnt += 1
                         test_desc_inds = np.array(init_test_inds + [0 for _ in

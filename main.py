@@ -44,10 +44,10 @@ def main():
 
     # hyper-parameters
     parser.add_argument("-dim", "--embedding_dim", type=int, default=100, help="length of embedding vector")
-    parser.add_argument("-nep", "--num_epochs", type=int, default=10, help="number of epochs")
+    parser.add_argument("-nep", "--num_epochs", type=int, default=5, help="number of epochs")
     parser.add_argument("-wng", "--word_ngrams", type=int, default=1, help="word ngrams")
     parser.add_argument("-sng", "--sort_ngrams", type=int, default=0, help="sort n-grams alphabetically")
-    parser.add_argument("-bs", "--batch_size", type=int, default=8192 * 2, help="batch size for train")
+    parser.add_argument("-bs", "--batch_size", type=int, default=4096, help="batch size for train")
     parser.add_argument("-bn", "--use_batch_norm", type=int, default=0, help="use batch norm")
     parser.add_argument("-mwc", "--min_word_count", type=int, default=1,
                         help="discard words which appear less than this number")
@@ -57,7 +57,7 @@ def main():
     parser.add_argument("-l2", "--l2_reg_weight", type=float, default=1e-6, help="regularization weight")
 
     # parameters
-    parser.add_argument("-bsi", "--batch_size_inference", type=int, default=8192 * 2, help="batch size for test")
+    parser.add_argument("-bsi", "--batch_size_inference", type=int, default=4096, help="batch size for test")
     parser.add_argument("-k", "--top_k", type=int, default=3, help="report results for top k predictions")
     parser.add_argument("-ck", "--compare_top_k", type=int, default=0,
                         help="compare top k accuracies for determining the best model")
@@ -121,7 +121,7 @@ def main():
     model_params = {
         "word_ngrams": args.word_ngrams,
         "sort_ngrams": sort_ngrams,
-        "word_id_path": os.path.abspath(os.path.join(cache_dir, "word_id.json")),
+        "word_dict_path": os.path.abspath(os.path.join(cache_dir, "word_dict.json")),
         "label_dict_path": os.path.abspath(os.path.join(cache_dir, "label_dict.json"))
     }
 

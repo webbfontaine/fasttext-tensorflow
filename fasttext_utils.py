@@ -358,14 +358,14 @@ def get_word_label_vocabs(descriptions, labels, word_ngrams, min_word_count, sor
     :return: tuple, word indices, weights and labels
     """
     label_dict_path = os.path.join(cache_dir, "label_dict.json")
-    word_id_path = os.path.join(cache_dir, "word_id.json")
+    word_dict_path = os.path.join(cache_dir, "word_dict.json")
 
-    if os.path.isfile(label_dict_path) and os.path.isfile(word_id_path) and not force:
+    if os.path.isfile(label_dict_path) and os.path.isfile(word_dict_path) and not force:
         print("\n*** Using cached dicts ***", flush=flush)
         using_cached = True
         with open(label_dict_path, "r") as infile:
             label_vocab = json.load(infile)
-        with open(word_id_path, "r") as infile:
+        with open(word_dict_path, "r") as infile:
             word_vocab = json.load(infile)
         tmp_cnt = sum([i["cnt"] for i in word_vocab.values()])
         print("Read {}m words and phrases".format(round(tmp_cnt / 1e6, 1)), flush=flush)
@@ -392,7 +392,7 @@ def get_word_label_vocabs(descriptions, labels, word_ngrams, min_word_count, sor
     if not using_cached:
         with open(label_dict_path, "w+") as outfile:
             json.dump(label_vocab, outfile)
-        with open(word_id_path, "w+") as outfile:
+        with open(word_dict_path, "w+") as outfile:
             json.dump(word_vocab, outfile)
     return word_vocab, label_vocab
 

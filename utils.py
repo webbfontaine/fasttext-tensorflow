@@ -61,11 +61,13 @@ def handle_space_paths(path):
 
 
 def copy_all(list_of_paths, destination_path):
+    if not os.path.isdir(destination_path):
+        os.mkdir(destination_path)
     for src_path in list_of_paths:
         if os.path.isfile(src_path):
             copy(src_path, os.path.join(destination_path, os.path.basename(src_path)))
         else:
-            print("invalid path, no such file {}".format(src_path))
+            print("Invalid path, no such file {}".format(src_path))
 
 
 def percent_array(x, multiplier=100, precision=2):

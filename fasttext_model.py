@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import tensorflow as tf
+import tensorflow.compat.v1.logging as logging
 
 from fasttext_utils import (
     get_all,
@@ -28,6 +29,7 @@ from utils import (
     copy_all,
 )
 
+logging.set_verbosity(logging.ERROR)
 warnings.filterwarnings("ignore")
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -56,26 +58,26 @@ class FastTextModel(object):
         self.info = {"model_path": os.path.abspath(model_path), "model_params_path": os.path.abspath(model_params_path)}
         with open(model_params_path, "r") as infile:
             model_params = json.load(infile)
-        for k, v in model_params.items():
-            self.info[k] = v
+        for key, value in model_params.items():
+            self.info[key] = value
         if os.path.isfile(model_params["label_dict_path"]):
             with open(model_params["label_dict_path"], "r") as infile:
-                self.label_vocab = json.load(infile)
+                self.label_dict = json.load(infile)
         else:
             new_path = os.path.join(os.path.dirname(model_params_path), "label_dict.json")
             print("{} not found, switching to model_params' path {}".format(model_params["label_dict_path"], new_path))
             with open(new_path, "r") as infile:
-                self.label_vocab = json.load(infile)
+                self.label_dict = json.load(infile)
             self.info["label_dict_path"] = os.path.abspath(new_path)
-        if os.path.isfile(model_params["word_id_path"]):
-            with open(model_params["word_id_path"], "r") as infile:
-                self.train_vocab = json.load(infile)
+        if os.path.isfile(model_params["word_dict_path"]):
+            with open(model_params["word_dict_path"], "r") as infile:
+                self.word_id = json.load(infile)
         else:
             new_path = os.path.join(os.path.dirname(model_params_path), "word_id.json")
-            print("{} not found, switching to model_params' path {}".format(model_params["word_id_path"], new_path))
+            print("{} not found, switching to model_params' path {}".format(model_params["word_dict_path"], new_path))
             with open(new_path, "r") as infile:
-                self.train_vocab = json.load(infile)
-            self.info["word_id_path"] = os.path.abspath(new_path)
+                self.word_id = json.load(infile)
+            self.info["word_dict_path"] = os.path.abspath(new_path)
         self.preprocessing_function = preprocessing_function
 
         get_list = ["input", "input_weights", "embeddings/embedding_matrix/read",
@@ -89,11 +91,12 @@ class FastTextModel(object):
             config = tf.ConfigProto(allow_soft_placement=True,
                                     gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_fraction,
                                                               allow_growth=True))
+        self._input_matrix, self._output_matrix = None, None
 
         with tf.device(self._device):
             with self._graph.as_default():
-                self._input_ph, self._weights_ph, self._input_mat, self._sent_vec, self._output_mat, self._output = \
-                    load_graph(model_path, get_list)
+                self._input_placeholder, self._weights_placeholder, self._input_matrix_tensor, self._sentence_vector, \
+                    self._output_matrix_tensor, self._output = load_graph(model_path, get_list)
 
             self._sess = tf.Session(graph=self._graph, config=config)
         self._dim = self.get_dimension()
@@ -108,22 +111,24 @@ class FastTextModel(object):
         Get the dimension (size) of a lookup vector (hidden layer).
         :return: int
         """
-        return int(self._sent_vec.shape[1])
+        return int(self._sentence_vector.shape[1])
 
     def get_input_matrix(self):
         """
         Get a copy of the full input matrix of a Model.
         :return: np.ndarray, size: word_count * dim
         """
-        return self._sess.run(self._input_mat)
+        if self._input_matrix is None:
+            self._input_matrix = self._sess.run(self._input_matrix_tensor)
+        return self._input_matrix
 
-    def get_input_vector(self, ind):
+    def get_input_vector(self, index):
         """
         Given an index, get the corresponding vector of the Input Matrix.
-        :param ind: int
+        :param index: int
         :return: np.ndarray, size: dim
         """
-        return self._sess.run(self._input_mat[ind])
+        return self._input_matrix[index]
 
     def get_labels(self, include_freq=False):
         """
@@ -131,9 +136,9 @@ class FastTextModel(object):
         :param include_freq: bool, returns tuple with labels and their frequencies
         :return: list / tuple of lists
         """
-        labels = sorted(self.label_vocab.keys())
+        labels = sorted(self.label_dict.keys())
         if include_freq:
-            return labels, [self.label_vocab[k]["cnt"] for k in labels]
+            return labels, [self.label_dict[key]["cnt"] for key in labels]
         return labels
 
     def get_line(self, text):
@@ -143,25 +148,28 @@ class FastTextModel(object):
         :param text: str
         :return: (list, list)
         """
-        words, labels = [], []
+        tokens, labels = ["__MEAN_EMBEDDING__"], []
         for token in text.split():
-            if token.startswith(self.label_prefix) and ():
-                if token[len(self.label_prefix):] in self.label_vocab:
-                    labels.append(token)
+            if token.startswith(self.label_prefix):
+                label_clean = token[len(self.label_prefix):]
+                if label_clean in self.label_dict:
+                    labels.append(label_clean)
             else:
-                words.append(token)
+                tokens.append(token)
         if self.preprocessing_function:
-            words = self.preprocessing_function(" ".join(words)).split()
-        return words, labels
+            tokens = self.preprocessing_function(" ".join(tokens)).split()
+        return tokens, labels
 
     def get_output_matrix(self):
         """
         Get a copy of the full output matrix of a Model.
         :return: np.ndarray, size: dim * label_count
         """
-        return self._sess.run(self._output_mat)
+        if self._output_matrix is None:
+            self._output_matrix = self._sess.run(self._output_matrix_tensor)
+        return self._output_matrix
 
-    def get_sentence_vector(self, text, batch_size=100):
+    def get_sentence_vector(self, text, batch_size=1000):
         """
         Given a string or list of string, get its (theirs) vector represenation(s). This function applies
         preprocessing function on the strings.
@@ -169,16 +177,17 @@ class FastTextModel(object):
         :param batch_size: int
         :return: np.ndarray, size: dim
         """
-        t = type(text)
-        if t not in [list, str, np.ndarray, pd.Series]:
+
+        if not isinstance(text, (list, str, np.ndarray, pd.Series)):
             raise ValueError("text should be string, list, numpy array or pandas series")
-        if isinstance(t, str):
+        if isinstance(text, str):
             text = [text]
         embeddings = []
 
         for batch, batch_weights in self._batch_generator(text, batch_size):
-            embeddings.extend(self._sess.run(self._sent_vec, feed_dict={self._input_ph: batch,
-                                                                        self._weights_ph: batch_weights}))
+            embeddings.extend(self._sess.run(self._sentence_vector,
+                                             feed_dict={self._input_placeholder: batch,
+                                                        self._weights_placeholder: batch_weights}))
         return np.squeeze(embeddings)
 
     def get_subword_id(self, subword):
@@ -187,19 +196,22 @@ class FastTextModel(object):
         :param subword:
         :return: int. Returns -1 if is not in vocabulary
         """
-        subword_transformed = "_".join(subword.split())
-        return self.train_vocab[subword_transformed]["id"] if subword_transformed in self.train_vocab else -1
+        return self.word_id[subword]["id"] if subword in self.word_id else -1
 
     def get_subwords(self, word):
+        word = word.replace("_", " ")
         word_splitted = word.split()
         if len(word_splitted) > self.info["word_ngrams"]:
-            return []
+            return [], []
         else:
-            return [phrase for phrase in get_all(word_splitted, self.info["word_ngrams"], self.info["sort_ngrams"])
-                    if phrase in self.train_vocab]
+            subwords = [phrase for phrase in get_all(word_splitted, self.info["word_ngrams"], self.info["sort_ngrams"])
+                        if phrase in self.word_id]
+            return subwords, [self.get_word_id(subword) for subword in subwords]
 
     def get_word_id(self, word):
-        return self.train_vocab[word]["id"] if word in self.train_vocab else -1
+        if " " in word:
+            word = word.replace(" ", "_")
+        return self.word_id[word]["id"] if word in self.word_id else -1
 
     def get_word_vector(self, word):
         """
@@ -219,9 +231,9 @@ class FastTextModel(object):
         :param include_freq: bool, returns tuple with words and their frequencies
         :return: list / tuple of lists
         """
-        words = sorted(self.train_vocab.keys())
+        words = sorted(self.word_id.keys())
         if include_freq:
-            return words, [self.train_vocab[k]["cnt"] for k in words]
+            return words, [self.word_id[key]["cnt"] for key in words]
         return words
 
     def _batch_generator(self, list_of_texts, batch_size, show_progress=False):
@@ -236,8 +248,8 @@ class FastTextModel(object):
             list_of_texts = [self.preprocessing_function(str(t)) for t in list_of_texts]
         else:
             list_of_texts = [str(t) for t in list_of_texts]
-        inds = np.arange(len(list_of_texts))
-        rem_inds, batch_inds = next_batch(inds, batch_size)
+        indices = np.arange(len(list_of_texts))
+        rem_indices, batch_indices = next_batch(indices, batch_size)
 
         if len(list_of_texts) <= batch_size:
             show_progress = False
@@ -245,37 +257,37 @@ class FastTextModel(object):
         disable_progress_bar = not show_progress
         progress_bar = tqdm(total=int(np.ceil(len(list_of_texts) / batch_size)), disable=disable_progress_bar)
 
-        while len(batch_inds) > 0:
+        while len(batch_indices) > 0:
             batch, batch_weights = [], []
 
-            descs_words = [list(get_all(list_of_texts[ind].split(), self.info["word_ngrams"], self.info["sort_ngrams"]))
-                           for ind in batch_inds]
+            descs_words = [list(get_all(list_of_texts[index].split(), self.info["word_ngrams"],
+                                        self.info["sort_ngrams"])) for index in batch_indices]
             num_max_words = max([len(desc_split) for desc_split in descs_words]) + 1
 
             for desc_words in descs_words:
-                init_test_inds = [0] + [self.train_vocab[phrase]["id"] for phrase in desc_words
-                                        if phrase in self.train_vocab]
+                init_test_indices = [0] + [self.word_id[phrase]["id"] for phrase in desc_words
+                                           if phrase in self.word_id]
 
-                test_desc_inds = init_test_inds + [0 for _ in range(num_max_words - len(init_test_inds))]
-                test_desc_weights = np.zeros_like(test_desc_inds, dtype=float)
-                test_desc_weights[:len(init_test_inds)] = 1. / len(init_test_inds)
+                test_desc_indices = init_test_indices + [0 for _ in range(num_max_words - len(init_test_indices))]
+                test_desc_weights = np.zeros_like(test_desc_indices, dtype=float)
+                test_desc_weights[:len(init_test_indices)] = 1. / len(init_test_indices)
 
-                batch.append(test_desc_inds)
+                batch.append(test_desc_indices)
                 batch_weights.append(test_desc_weights)
-            rem_inds, batch_inds = next_batch(rem_inds, batch_size)
+            rem_indices, batch_indices = next_batch(rem_indices, batch_size)
 
             progress_bar.update()
             yield batch, batch_weights
 
         progress_bar.close()
 
-    def predict(self, list_of_texts, k=1, batch_size=100, threshold=-0.1, show_progress=True):
+    def predict(self, list_of_texts, k=1, threshold=-0.1, batch_size=1000, show_progress=True):
         """
         Predict top k predictions on given texts
         :param list_of_texts: list/array
         :param k: int, top k predictions
-        :param batch_size: int
         :param threshold: float, from 0 to 1, default -0.1 meaining no threshold
+        :param batch_size: int
         :param show_progress: bool, ignored if list of text is string or has smaller or equal length to batch size
         :return: top k predictions and probabilities
         """
@@ -283,69 +295,69 @@ class FastTextModel(object):
             list_of_texts = [list_of_texts]
 
         labels = self.get_labels()
-        preds, probs = [], []
+        predictions, probabilities = [], []
 
         for batch, batch_weights in self._batch_generator(list_of_texts, batch_size, show_progress):
-            batch_probs = self._sess.run(self._output, feed_dict={self._input_ph: batch,
-                                                                  self._weights_ph: batch_weights})
+            batch_probabilities = self._sess.run(self._output, feed_dict={self._input_placeholder: batch,
+                                                                          self._weights_placeholder: batch_weights})
 
-            top_k_probs, top_k_preds = [], []
-            for i in batch_probs:
-                pred_row, prob_row = [], []
+            top_k_probabilities, top_k_predictions = [], []
+            for i in batch_probabilities:
+                predictions_row, probabilities_row = [], []
                 if k == -1:
-                    top_k_inds = np.argsort(i)[::-1]
+                    top_k_indices = np.argsort(i)[::-1]
                 else:
-                    top_k_inds = np.argsort(i)[-k:][::-1]
-                for ind, prob in zip(top_k_inds, i[top_k_inds]):
-                    if prob > threshold:
-                        pred_row.append(ind)
-                        prob_row.append(prob)
-                top_k_preds.append([labels[i] for i in pred_row])
-                top_k_probs.append(prob_row)
-            preds.extend(top_k_preds)
-            probs.extend(top_k_probs)
-        return preds, probs
+                    top_k_indices = np.argsort(i)[-k:][::-1]
+                for index, probability in zip(top_k_indices, i[top_k_indices]):
+                    if probability > threshold:
+                        predictions_row.append(index)
+                        probabilities_row.append(probability)
+                top_k_predictions.append([labels[i] for i in predictions_row])
+                top_k_probabilities.append(probabilities_row)
+            predictions.extend(top_k_predictions)
+            probabilities.extend(top_k_probabilities)
+        return predictions, probabilities
 
-    def test(self, list_of_texts, list_of_labels, batch_size=100, k=1, threshold=-0.1, show_progress=True):
+    def test(self, list_of_texts, list_of_labels, k=1, threshold=-0.1, batch_size=1000, show_progress=True):
         """
         Predict top k predictions on given texts
         :param list_of_texts: list/array
         :param list_of_labels: list/array
         :param k: int, top k predictions
-        :param batch_size: int
         :param threshold: float, from 0 to 1. Default is -0.1 meaining no threshold
+        :param batch_size: int
         :param show_progress: bool
         :return: top k predictions and probabilities
         """
         if len(list_of_texts) != len(list_of_labels):
             raise ValueError('the lengths of list_of_texts and list_of_labels must match')
 
-        preds, probs = self.predict(list_of_texts=list_of_texts, batch_size=batch_size, k=k,
-                                    threshold=threshold, show_progress=show_progress)
+        predictions, probabilities = self.predict(list_of_texts=list_of_texts, batch_size=batch_size, k=k,
+                                                  threshold=threshold, show_progress=show_progress)
         recall, precision = 0, 0
-        total_lbs, total_preds = 0, 0
-        for lbs, prds in zip(list_of_labels, preds):
-            if not isinstance(lbs, list):
-                lbs = [lbs]
+        all_labels, all_predictions = 0, 0
+        for current_labels, current_predictions in zip(list_of_labels, predictions):
+            if not isinstance(current_labels, list):
+                current_labels = [current_labels]
 
-            total_lbs += len(lbs)
-            total_preds += len(prds)
-            for lb in lbs:
-                if lb in prds:
+            all_labels += len(current_labels)
+            all_predictions += len(current_predictions)
+            for current_label in current_labels:
+                if current_label in current_predictions:
                     recall += 1
-            for prd in prds:
-                if prd in lbs:
+            for current_prediction in current_predictions:
+                if current_prediction in current_labels:
                     precision += 1
 
-        return len(list_of_texts), round(precision / total_preds, 5), round(recall / total_lbs, 5)
+        return len(list_of_texts), round(precision / all_predictions, 5), round(recall / all_labels, 5)
 
-    def test_file(self, test_data_path, batch_size=100, k=1, threshold=-0.1, show_progress=True):
+    def test_file(self, test_data_path, k=1, threshold=-0.1, batch_size=1000, show_progress=True):
         """
         Predict top k predictions on given texts
         :param test_data_path: str, path to test file
-        :param batch_size: int
         :param k: int, top k predictions
         :param threshold: float, from 0 to 1, default -0.1 meaining no threshold
+        :param batch_size: int
         :param show_progress: bool
         :return: top k predictions and probabilities
         """
@@ -359,7 +371,7 @@ class FastTextModel(object):
         :param destination_path: str
         :return: None
         """
-        all_paths = [v for k, v in self.info.items() if "path" in k]
+        all_paths = [value for key, value in self.info.items() if "path" in key]
         if "train_path" in self.hyperparams:
             all_paths.append(self.hyperparams["train_path"])
 
@@ -370,9 +382,15 @@ class FastTextModel(object):
             all_paths.append(self.hyperparams["original_train_path"])
             all_paths.extend(self.hyperparams["additional_data_paths"])
 
-        if "split_and_train_params" in self.hyperparams:
-            all_paths.append(self.hyperparams["split_and_train_params"]["df_path"])
         copy_all(all_paths, destination_path)
+        model_params_path = os.path.join(destination_path, "model_params.json")
+        with open(model_params_path, "r") as infile:
+            model_params = json.load(infile)
+        for key, value in model_params.items():
+            if key.endswith("path"):
+                model_params[key] = os.path.join(os.path.abspath(destination_path), value.split("/")[-1])
+        with open(model_params_path, "w+") as outfile:
+            json.dump(model_params, outfile)
 
 
 class train_supervised(FastTextModel):
@@ -445,16 +463,15 @@ class train_supervised(FastTextModel):
         do_preprocessing = preprocessing_function is not None
 
         if len(hyperparams) != 0:
-            for k, v in hyperparams.items():
-                if k not in self.hyperparams:
-                    to_restore[k] = v
-                    if k != "split_and_train_params":
-                        print("WARNING! {} not in hyperparams, ignoring it".format(k))
+            for key, value in hyperparams.items():
+                if key not in self.hyperparams:
+                    to_restore[key] = value
+                    print("WARNING! {} not in hyperparams, ignoring it".format(key))
                 else:
-                    if k in ["cache_dir", "log_dir"]:
-                        self.hyperparams[k] = handle_space_paths(v)
+                    if key in ["cache_dir", "log_dir"]:
+                        self.hyperparams[key] = handle_space_paths(value)
                     else:
-                        self.hyperparams[k] = v
+                        self.hyperparams[key] = value
         train_path = os.path.abspath(train_path)
         if additional_data_paths:
             data_to_save = []
@@ -501,6 +518,7 @@ class train_supervised(FastTextModel):
             print("Done!")
 
         if test_path is not None:
+            test_path = os.path.abspath(test_path)
             self.hyperparams["use_test"] = 1
             if do_preprocessing:
                 prep_test_path = preprocess_data(test_path, preprocessing_function)
@@ -519,8 +537,8 @@ class train_supervised(FastTextModel):
         self.top_1_accuracy, self.top_k_accuracy, log_dir = \
             get_accuracy_log_dir(process, self.hyperparams["top_k"], verbose)
 
-        for k, v in to_restore.items():
-            self.hyperparams[k] = v
+        for key, value in to_restore.items():
+            self.hyperparams[key] = value
         super(train_supervised, self).__init__(model_path=os.path.join(log_dir, "model_best.pb"),
                                                model_params_path=os.path.join(log_dir, "model_params.json"),
                                                use_gpu=use_gpu, gpu_fraction=gpu_fraction, hyperparams=self.hyperparams,
@@ -528,7 +546,7 @@ class train_supervised(FastTextModel):
                                                preprocessing_function=preprocessing_function)
 
     def _get_command(self):
-        args = ["--{} {}".format(k, v) for k, v in self.hyperparams.items() if str(v)]
+        args = ["--{} {}".format(key, value) for key, value in self.hyperparams.items() if str(value)]
         cur_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
         command = " ".join(["python3 {}".format(os.path.join(cur_dir, "main.py"))] + args)
         return command
