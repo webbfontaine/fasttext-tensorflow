@@ -81,16 +81,16 @@ def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, 
         max_len = max(max_len, len(row_splitted))
 
         tmp = []
-        for ind, w in enumerate(row_splitted):
+        for index, w in enumerate(row_splitted):
             if not w.startswith(label_prefix):
                 break
             tmp.append(w[len(label_prefix):])
 
         labels.append(" ".join(tmp))
         if join_desc:
-            descriptions.append(" ".join(row_splitted[ind:]))
+            descriptions.append(" ".join(row_splitted[index:]))
         else:
-            descriptions.append(row_splitted[ind:])
+            descriptions.append(row_splitted[index:])
 
     if return_max_len:
         return descriptions, labels, max_len
@@ -225,12 +225,12 @@ def check_model_presence(log_dir, epoch=None):
     :param epoch: int, if None will take model_best, else will check for the specified epoch
     :return: bool, True, if the model exists, otherwise False
     """
+    model_params_exists = os.path.isfile(os.path.join(log_dir, "model_params.json"))
     if epoch:
-        return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
-               and (os.path.join(log_dir, "model_ep{}.pb".format(epoch)))
+        model_exits = os.path.join(log_dir, "model_ep{}.pb".format(epoch))
     else:
-        return os.path.isfile(os.path.join(log_dir, "results.json")) and (os.path.join(log_dir, "model_params.json")) \
-               and (os.path.join(log_dir, "model_best.pb"))
+        model_exits = os.path.join(log_dir, "model_best.pb")
+    return model_params_exists and model_exits
 
 
 def batch_generator(description_hashes, labels, batch_size, label_vocab, cache, shuffle=False, show_progress=True,

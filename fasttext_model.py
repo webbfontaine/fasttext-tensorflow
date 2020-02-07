@@ -14,19 +14,19 @@ from tqdm import tqdm
 import tensorflow as tf
 import tensorflow.compat.v1.logging as logging
 
-from fasttext_utils import (
-    get_all,
-    parse_txt,
-    next_batch,
-    preprocess_data,
-    get_accuracy_log_dir,
-)
 from utils import (
     load_graph,
     hash_,
     validate,
     handle_space_paths,
     copy_all,
+)
+from fasttext_utils import (
+    get_all,
+    parse_txt,
+    next_batch,
+    preprocess_data,
+    get_accuracy_log_dir,
 )
 
 logging.set_verbosity(logging.ERROR)
@@ -81,7 +81,7 @@ class FastTextModel(object):
         self.preprocessing_function = preprocessing_function
 
         get_list = ["input", "input_weights", "embeddings/embedding_matrix/read",
-                    "mean_sentece_vector/sentence_embedding", "logits/kernel/read", "prediction"]
+                    "mean_sentence_embedding/sentence_embedding", "logits/kernel/read", "prediction"]
         get_list = [i + ":0" for i in get_list]
 
         self._device = "/cpu:0"
@@ -396,7 +396,7 @@ class FastTextModel(object):
 class train_supervised(FastTextModel):
     def __init__(self, train_path, test_path=None, additional_data_paths=None, hyperparams=None,
                  preprocessing_function=None, log_dir="./", use_gpu=False, gpu_fraction=0.5, verbose=True,
-                 remove_extra_labels=True):
+                 remove_extra_labels=True, force=False):
         """
         Train a supervised fasttext model
         :param train_path: str, path to train file
@@ -412,6 +412,7 @@ class train_supervised(FastTextModel):
         :param verbose: bool
         :param remove_extra_labels: bool, remove datapoints with labels which appear in additional_data_paths but not in
         train_data_path. Ignored if additional_data_paths is None
+        :param force: bool, forced training
         :return: object, the trained model
         """
         log_dir = validate(log_dir)
@@ -431,11 +432,11 @@ class train_supervised(FastTextModel):
              "use_batch_norm": 0,
              "min_word_count": 1,
              "learning_rate": 0.1,
-             "learning_rate_multiplier": 0.7,
+             "learning_rate_multiplier": 0.8,
              "dropout": 0.5,
-             "l2_reg_weight": 1e-07,
+             "l2_reg_weight": 1e-06,
              "batch_size_inference": 4096,
-             "top_k": 5,
+             "top_k": 3,
              "compare_top_k": 0,
              "save_all_models": 0,
              "use_test": 0,
@@ -530,6 +531,9 @@ class train_supervised(FastTextModel):
         if use_gpu:
             self.hyperparams["use_gpu"] = 1
             self.hyperparams["gpu_fraction"] = gpu_fraction
+
+        if force:
+            self.hyperparams["force"] = 1
 
         # using Popen as calling the command from Jupyter doesn't deallocate GPU memory
         command = self._get_command()

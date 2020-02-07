@@ -72,3 +72,16 @@ def copy_all(list_of_paths, destination_path):
 
 def percent_array(x, multiplier=100, precision=2):
     return np.round(multiplier * np.mean(x), precision)
+
+
+def write_summaries(end_epoch_loss, mean_accuracy, mean_accuracy_k, top_k, summary_writer, epoch):
+    summary_accuracy = tf.Summary(value=[tf.Summary.Value(tag="Accuracy",
+                                                          simple_value=mean_accuracy)])
+    summary_accuracy_k = tf.Summary(value=[tf.Summary.Value(tag="Accuracy_top_{}".format(top_k),
+                                                            simple_value=mean_accuracy_k)])
+    summary_loss = tf.Summary(
+        value=[tf.Summary.Value(tag="Loss", simple_value=np.mean(end_epoch_loss))])
+
+    summary_writer.add_summary(summary_accuracy, epoch)
+    summary_writer.add_summary(summary_accuracy_k, epoch)
+    summary_writer.add_summary(summary_loss, epoch)

@@ -8,14 +8,6 @@ from sys import exit
 import numpy as np
 import tensorflow.compat.v1.logging as logging
 
-from fasttext_utils import (
-    parse_txt,
-    clean_directory,
-    cache_data,
-    check_model_presence,
-    get_word_label_vocabs,
-    get_max_words_with_ngrams,
-)
 from utils import (
     hash_,
     validate,
@@ -24,6 +16,14 @@ from utils import (
 from train import (
     run_train,
     get_accuracy,
+)
+from fasttext_utils import (
+    parse_txt,
+    clean_directory,
+    cache_data,
+    check_model_presence,
+    get_word_label_vocabs,
+    get_max_words_with_ngrams,
 )
 
 logging.set_verbosity(logging.ERROR)
@@ -65,6 +65,7 @@ def main():
     parser.add_argument("-ut", "--use_test", type=int, default=1, help="evaluate on test data")
     parser.add_argument("-gpu", "--use_gpu", type=int, default=0, help="use gpu for training")
     parser.add_argument("-gpu_fr", "--gpu_fraction", type=float, default=0.5, help="what fraction of gpu to allocate")
+    parser.add_argument("-utb", "--use_tensorboard", type=int, default=0, help="use tensorboard")
     parser.add_argument("-cd", "--cache_dir", type=str, help="cache directory", default="./cache/")
     parser.add_argument("-ld", "--log_dir", type=str, help="log directory", default="./results/")
     parser.add_argument("-f", "--force", type=int, default=0, help="force retraining")
@@ -73,16 +74,12 @@ def main():
 
     args = parser.parse_args()
     for bool_param in [args.use_batch_norm, args.save_all_models, args.use_test, args.sort_ngrams, args.use_gpu,
-                       args.force, args.flush, args.compare_top_k, args.progress_bar]:
+                       args.use_tensorboard, args.force, args.flush, args.compare_top_k, args.progress_bar]:
         if bool_param not in [0, 1]:
             raise ValueError("{} should be 0 or 1.".format(bool_param))
 
-    use_batch_norm = bool(args.use_batch_norm)
-    compare_top_k = bool(args.compare_top_k)
-    save_all_models = bool(args.save_all_models)
+    train_path = os.path.abspath(args.train_path)
     sort_ngrams = bool(args.sort_ngrams)
-    use_gpu = bool(args.use_gpu)
-    force = bool(args.force)
     progress_bar = bool(args.progress_bar)
     flush = bool(args.flush)
 
@@ -94,26 +91,27 @@ def main():
     print("\n\nTraining with arguments:\n{}\n".format(args))
 
     cache_dir = validate(args.cache_dir)
-    train_history_path = "history.json"
+    log_dir = validate(args.log_dir)
+    train_history_path = os.path.join(log_dir, "history.json")
 
     np.random.seed(args.seed)
 
     train_descriptions, train_labels, max_words = \
-        parse_txt(args.train_path, return_max_len=True, debug_till_row=-1, fraction=args.data_fraction, seed=args.seed,
+        parse_txt(train_path, return_max_len=True, debug_till_row=-1, fraction=args.data_fraction, seed=args.seed,
                   label_prefix=args.label_prefix)
 
     data_specific = {
-        "train_path": args.train_path, "seed": args.seed, "data_fraction": args.data_fraction,
-        "min_word_count": args.min_word_count, "word_ngrams": args.word_ngrams, "sort_ngrams": sort_ngrams,
+        "seed": args.seed, "data_fraction": args.data_fraction, "min_word_count": args.min_word_count,
+        "word_ngrams": args.word_ngrams, "sort_ngrams": sort_ngrams,
     }
 
-    cache_dir = os.path.abspath(validate(os.path.join(cache_dir, get_cache_hash(list_of_texts=train_descriptions,
-                                                                                data_specific_params=data_specific))))
+    data_hash = get_cache_hash(list_of_texts=train_descriptions, data_specific_params=data_specific)
+    cache_dir = os.path.abspath(validate(os.path.join(cache_dir, data_hash)))
 
     train_specific = {"embedding_dim": args.embedding_dim, "num_epochs": args.num_epochs, "batch_size": args.batch_size,
                       "learning_rate": args.learning_rate, "learning_rate_multiplier": args.learning_rate_multiplier,
-                      "use_batch_norm": use_batch_norm, "l2_reg_weight": args.l2_reg_weight, "dropout": args.dropout,
-                      "cache_dir": cache_dir}
+                      "use_batch_norm": bool(args.use_batch_norm), "l2_reg_weight": args.l2_reg_weight,
+                      "dropout": args.dropout, "cache_dir": cache_dir}
 
     for k, v in data_specific.items():
         train_specific[k] = v
@@ -126,16 +124,18 @@ def main():
     }
 
     hyperparams_hashed = hash_("".join([str(i) for i in train_specific.values()]))
-    log_dir = validate(os.path.join(validate(args.log_dir), hyperparams_hashed))
+    current_log_dir = validate(os.path.join(log_dir, hyperparams_hashed))
+    data_specific["train_path"], train_specific["train_path"] = train_path, train_path
 
     train_params = {
-        "use_gpu": use_gpu,
+        "use_gpu": bool(args.use_gpu),
         "gpu_fraction": args.gpu_fraction,
+        "use_tensorboard": bool(args.use_tensorboard),
         "top_k": args.top_k,
-        "save_all_models": save_all_models,
-        "compare_top_k": compare_top_k,
+        "save_all_models": bool(args.save_all_models),
+        "compare_top_k": bool(args.compare_top_k),
         "use_test": use_test,
-        "log_dir": log_dir,
+        "log_dir": current_log_dir,
         "batch_size_inference": args.batch_size_inference,
         "progress_bar": progress_bar,
         "flush": flush,
@@ -144,16 +144,17 @@ def main():
     if os.path.exists(train_history_path):
         with open(train_history_path) as infile:
             train_history = json.load(infile)
-        if hyperparams_hashed in train_history and check_model_presence(log_dir):
-            if not force:
+
+        if hyperparams_hashed in train_history and check_model_presence(current_log_dir):
+            if not bool(args.force):
                 if args.test_path:
-                    get_accuracy(log_dir, train_params, train_history_path, hyperparams_hashed,
+                    get_accuracy(current_log_dir, train_params, train_history_path, hyperparams_hashed,
                                  train_history, args.test_path, args.label_prefix)
                 else:
-                    get_accuracy(log_dir, train_params, train_history_path, hyperparams_hashed,
-                                 train_history, args.train_path, args.label_prefix)
+                    get_accuracy(current_log_dir, train_params, train_history_path, hyperparams_hashed,
+                                 train_history, train_path, args.label_prefix)
 
-                print("The model is stored at {}".format(log_dir))
+                print("The model is stored at {}".format(current_log_dir))
                 exit()
             else:
                 print("Forced retraining")
@@ -163,7 +164,7 @@ def main():
     else:
         train_history = dict()
 
-    clean_directory(log_dir)
+    clean_directory(current_log_dir)
 
     max_words_with_ng = get_max_words_with_ngrams(max_words, args.word_ngrams)
 
@@ -173,10 +174,10 @@ def main():
     print("Max number of words with n-grams in description: {}".format(max_words_with_ng))
 
     word_vocab, label_vocab = get_word_label_vocabs(train_descriptions, train_labels, args.word_ngrams,
-                                                    args.min_word_count, sort_ngrams, cache_dir, force,
+                                                    args.min_word_count, sort_ngrams, cache_dir, bool(args.force),
                                                     show_progress=progress_bar, flush=flush)
 
-    with open(os.path.join(log_dir, "model_params.json"), "w+") as outfile:
+    with open(os.path.join(current_log_dir, "model_params.json"), "w+") as outfile:
         json.dump(model_params, outfile)
 
     num_words_in_train = len(word_vocab)
