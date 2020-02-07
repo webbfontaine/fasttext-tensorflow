@@ -73,6 +73,7 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
                                                           allow_growth=True))
     else:
         device = "/cpu:0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         config = tf.ConfigProto(allow_soft_placement=True)
 
     with tf.device(device):
@@ -124,7 +125,6 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
             total_loss = tf.add(ce_loss, l2_loss, name="Total_loss")
 
             tf.summary.scalar("Cross_entropy_loss", ce_loss)
-            tf.summary.histogram("Mean_embedding", mean_embedding)
             summary_op = tf.summary.merge_all()
 
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -164,7 +164,11 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
                     it += 1
                 print("Current learning rate: {}".format(round(learning_rate, 7)), flush=flush)
                 learning_rate *= learning_rate_multiplier
-                print("Moving mean loss: {}".format(percent_array(losses)), flush=flush)
+                mean_loss = percent_array(losses)
+                if np.isnan(mean_loss):
+                    print("Loss is NaN. Try using smaller learning rate")
+                    exit()
+                print("Moving mean loss: {}".format(mean_loss), flush=flush)
 
                 mean_accuracy = percent_array(end_epoch_accuracy)
                 mean_accuracy_k = percent_array(end_epoch_accuracy_k)
