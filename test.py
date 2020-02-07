@@ -46,6 +46,7 @@ def main():
                                                           allow_growth=True))
     else:
         device = "/cpu:0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         config = tf.ConfigProto(allow_soft_placement=True)
 
     num_thrown_for_label = 0
