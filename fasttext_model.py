@@ -71,12 +71,12 @@ class FastTextModel(object):
             self.info["label_dict_path"] = os.path.abspath(new_path)
         if os.path.isfile(model_params["word_dict_path"]):
             with open(model_params["word_dict_path"], "r") as infile:
-                self.word_id = json.load(infile)
+                self.word_dict = json.load(infile)
         else:
-            new_path = os.path.join(os.path.dirname(model_params_path), "word_id.json")
+            new_path = os.path.join(os.path.dirname(model_params_path), "word_dict.json")
             print("{} not found, switching to model_params' path {}".format(model_params["word_dict_path"], new_path))
             with open(new_path, "r") as infile:
-                self.word_id = json.load(infile)
+                self.word_dict = json.load(infile)
             self.info["word_dict_path"] = os.path.abspath(new_path)
         self.preprocessing_function = preprocessing_function
 
@@ -196,7 +196,7 @@ class FastTextModel(object):
         :param subword:
         :return: int. Returns -1 if is not in vocabulary
         """
-        return self.word_id[subword]["id"] if subword in self.word_id else -1
+        return self.word_dict[subword]["id"] if subword in self.word_dict else -1
 
     def get_subwords(self, word):
         word = word.replace("_", " ")
@@ -205,13 +205,13 @@ class FastTextModel(object):
             return [], []
         else:
             subwords = [phrase for phrase in get_all(word_splitted, self.info["word_ngrams"], self.info["sort_ngrams"])
-                        if phrase in self.word_id]
+                        if phrase in self.word_dict]
             return subwords, [self.get_word_id(subword) for subword in subwords]
 
     def get_word_id(self, word):
         if " " in word:
             word = word.replace(" ", "_")
-        return self.word_id[word]["id"] if word in self.word_id else -1
+        return self.word_dict[word]["id"] if word in self.word_dict else -1
 
     def get_word_vector(self, word):
         """
@@ -220,10 +220,10 @@ class FastTextModel(object):
         :return: np.ndarray, size: dim. returns 0s if not from vocabulary
         """
         if self.preprocessing_function:
-            word_id = self.get_word_id(self.preprocessing_function(word))
+            word_dict = self.get_word_id(self.preprocessing_function(word))
         else:
-            word_id = self.get_word_id(word)
-        return self.get_input_vector(word_id) if word_id != -1 else np.zeros(self._dim, dtype=np.float32)
+            word_dict = self.get_word_id(word)
+        return self.get_input_vector(word_dict) if word_dict != -1 else np.zeros(self._dim, dtype=np.float32)
 
     def get_words(self, include_freq=False):
         """
@@ -231,9 +231,9 @@ class FastTextModel(object):
         :param include_freq: bool, returns tuple with words and their frequencies
         :return: list / tuple of lists
         """
-        words = sorted(self.word_id.keys())
+        words = sorted(self.word_dict.keys())
         if include_freq:
-            return words, [self.word_id[key]["cnt"] for key in words]
+            return words, [self.word_dict[key]["cnt"] for key in words]
         return words
 
     def _batch_generator(self, list_of_texts, batch_size, show_progress=False):
@@ -245,11 +245,11 @@ class FastTextModel(object):
         :return: batch word indices, batch word weights
         """
         if self.preprocessing_function:
-            list_of_texts = [self.preprocessing_function(str(t)) for t in list_of_texts]
+            list_of_texts = [self.preprocessing_function(str(text)) for text in list_of_texts]
         else:
-            list_of_texts = [str(t) for t in list_of_texts]
+            list_of_texts = [str(text) for text in list_of_texts]
         indices = np.arange(len(list_of_texts))
-        rem_indices, batch_indices = next_batch(indices, batch_size)
+        remaining_indices, batch_indices = next_batch(indices, batch_size)
 
         if len(list_of_texts) <= batch_size:
             show_progress = False
@@ -260,21 +260,22 @@ class FastTextModel(object):
         while len(batch_indices) > 0:
             batch, batch_weights = [], []
 
-            descs_words = [list(get_all(list_of_texts[index].split(), self.info["word_ngrams"],
-                                        self.info["sort_ngrams"])) for index in batch_indices]
-            num_max_words = max([len(desc_split) for desc_split in descs_words]) + 1
+            batch_descriptions = [list(get_all(list_of_texts[index].split(), self.info["word_ngrams"],
+                                               self.info["sort_ngrams"])) for index in batch_indices]
+            num_max_words = max([len(batch_description) for batch_description in batch_descriptions]) + 1
 
-            for desc_words in descs_words:
-                init_test_indices = [0] + [self.word_id[phrase]["id"] for phrase in desc_words
-                                           if phrase in self.word_id]
+            for batch_description in batch_descriptions:
+                initial_indices = [0] + [self.word_dict[phrase]["id"] for phrase in batch_description
+                                         if phrase in self.word_dict]
 
-                test_desc_indices = init_test_indices + [0 for _ in range(num_max_words - len(init_test_indices))]
-                test_desc_weights = np.zeros_like(test_desc_indices, dtype=float)
-                test_desc_weights[:len(init_test_indices)] = 1. / len(init_test_indices)
+                description_indices = np.array(initial_indices +
+                                               [0 for _ in range(num_max_words - len(initial_indices))])
+                description_weights = np.zeros_like(description_indices, dtype=np.float32)
+                description_weights[:len(initial_indices)] = 1. / len(initial_indices)
 
-                batch.append(test_desc_indices)
-                batch_weights.append(test_desc_weights)
-            rem_indices, batch_indices = next_batch(rem_indices, batch_size)
+                batch.append(description_indices)
+                batch_weights.append(description_weights)
+            remaining_indices, batch_indices = next_batch(remaining_indices, batch_size)
 
             progress_bar.update()
             yield batch, batch_weights
@@ -349,7 +350,7 @@ class FastTextModel(object):
                 if current_prediction in current_labels:
                     precision += 1
 
-        return len(list_of_texts), round(precision / all_predictions, 5), round(recall / all_labels, 5)
+        return len(list_of_texts), round(100 * precision / all_predictions, 2), round(100 * recall / all_labels, 2)
 
     def test_file(self, test_data_path, k=1, threshold=-0.1, batch_size=1000, show_progress=True):
         """
@@ -361,7 +362,7 @@ class FastTextModel(object):
         :param show_progress: bool
         :return: top k predictions and probabilities
         """
-        data, labels = parse_txt(test_data_path, label_prefix=self.label_prefix, join_desc=True)
+        data, labels = parse_txt(test_data_path, label_prefix=self.label_prefix)
         return self.test(data, labels, batch_size=batch_size, k=k, threshold=threshold, show_progress=show_progress)
 
     def export_model(self, destination_path):
@@ -492,11 +493,11 @@ class train_supervised(FastTextModel):
                     current_data = [data for data, needed in zip(current_data, needed_mask) if needed]
                     current_labels = [data for data, needed in zip(current_labels, needed_mask) if needed]
                 if do_preprocessing:
-                    data_to_save.extend(["{}{} {}".
-                                        format(self.hyperparams["label_prefix"], i, preprocessing_function(j)) for i, j
+                    data_to_save.extend(["{}{} {}".format(self.hyperparams["label_prefix"], label,
+                                                          preprocessing_function(data)) for label, data
                                          in zip(current_labels, current_data)])
                 else:
-                    data_to_save.extend(["{}{} {}".format(self.hyperparams["label_prefix"], i, j) for i, j
+                    data_to_save.extend(["{}{} {}".format(self.hyperparams["label_prefix"], label, data) for label, data
                                          in zip(current_labels, current_data)])
             np.savetxt(concat_path, data_to_save, fmt="%s")
             if do_preprocessing:
@@ -536,8 +537,8 @@ class train_supervised(FastTextModel):
             self.hyperparams["force"] = 1
 
         # using Popen as calling the command from Jupyter doesn't deallocate GPU memory
-        command = self._get_command()
-        process = Popen(command, stdout=PIPE, shell=True, stderr=STDOUT, bufsize=1, close_fds=True)
+        train_command = self._get_train_command()
+        process = Popen(train_command, stdout=PIPE, shell=True, stderr=STDOUT, bufsize=1, close_fds=True)
         self.top_1_accuracy, self.top_k_accuracy, log_dir = \
             get_accuracy_log_dir(process, self.hyperparams["top_k"], verbose)
 
@@ -549,8 +550,8 @@ class train_supervised(FastTextModel):
                                                label_prefix=self.hyperparams["label_prefix"],
                                                preprocessing_function=preprocessing_function)
 
-    def _get_command(self):
+    def _get_train_command(self):
         args = ["--{} {}".format(key, value) for key, value in self.hyperparams.items() if str(value)]
-        cur_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
-        command = " ".join(["python3 {}".format(os.path.join(cur_dir, "main.py"))] + args)
-        return command
+        current_directory = os.path.dirname(inspect.getfile(inspect.currentframe()))
+        train_command = " ".join(["python3 {}".format(os.path.join(current_directory, "main.py"))] + args)
+        return train_command

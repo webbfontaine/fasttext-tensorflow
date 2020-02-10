@@ -142,7 +142,7 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
 
             iteration = 0
             train_start = time.time()
-            best_score = -1
+            best_score, best_scores = -1, {1: None, top_k: None}
             logs = {1: [], top_k: [], "best": -1}
 
             for epoch in range(1, num_epochs + 1):
@@ -229,6 +229,8 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
 
                 if comparable > best_score:
                     best_score = comparable
+                    best_scores[1] = mean_accuracy
+                    best_scores[top_k] = mean_accuracy_k
                     freeze_save_graph(sess, log_dir, "model_best.pb", "prediction")
                     logs["best"] = epoch
 
@@ -243,11 +245,9 @@ def run_train(data, train_specific, train_params, data_specific, train_history, 
                                                                          logs[top_k][logs["best"] - 1]), flush=flush)
             print("The model is stored at {}".format(log_dir), flush=flush)
             if use_test:
-                results = {"hyperparams": train_specific,
-                           "scores": {test_path: {top_k: mean_accuracy_k, 1: mean_accuracy}}}
+                results = {"hyperparams": train_specific, "scores": {test_path: best_scores}}
             else:
-                results = {"hyperparams": train_specific,
-                           "scores": {train_path: {top_k: mean_accuracy_k, 1: mean_accuracy}}}
+                results = {"hyperparams": train_specific, "scores": {train_path: best_scores}}
             train_history[hyperparameter_hash] = results
 
             with open(os.path.join(log_dir, "results.json"), "w+") as outfile:
@@ -280,6 +280,7 @@ def get_accuracy(log_dir, train_params, train_history_path, hyperparameter_hash,
     print("Already trained with those hyper-parameters", flush=flush)
     not_done = False
     top_k = train_params["top_k"]
+
     if test_path in train_history[hyperparameter_hash]["scores"]:
         if (str(top_k) in train_history[hyperparameter_hash]["scores"][test_path]) and \
                 (str(1) in train_history[hyperparameter_hash]["scores"][test_path]):
@@ -291,7 +292,7 @@ def get_accuracy(log_dir, train_params, train_history_path, hyperparameter_hash,
         not_done = True
 
     if not_done:
-        test_descriptions, test_labels = parse_txt(test_path, join_desc=True, label_prefix=label_prefix)
+        test_descriptions, test_labels = parse_txt(test_path, label_prefix=label_prefix)
         model = FastTextModel(model_path=os.path.join(log_dir, "model_best.pb"),
                               model_params_path=os.path.join(log_dir, "model_params.json"), label_prefix=label_prefix,
                               use_gpu=train_params["use_gpu"], gpu_fraction=train_params["gpu_fraction"])
@@ -311,7 +312,7 @@ def get_accuracy(log_dir, train_params, train_history_path, hyperparameter_hash,
         print("The accuracy on top {} was {}".format(top_k, top_k_score), flush=flush)
 
         if test_path not in train_history[hyperparameter_hash]["scores"]:
-            train_history[hyperparameter_hash]["scores"][test_path] = {}
+            train_history[hyperparameter_hash]["scores"][test_path] = dict()
         train_history[hyperparameter_hash]["scores"][test_path][1] = top_1_score
         train_history[hyperparameter_hash]["scores"][test_path][top_k] = top_k_score
         with open(train_history_path, "w+") as outfile:

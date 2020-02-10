@@ -56,10 +56,10 @@ def main():
             label_dict = json.load(infile)
     if os.path.isfile(model_params["word_dict_path"]):
         with open(model_params["word_dict_path"], "r") as infile:
-            word_id = json.load(infile)
+            word_dict = json.load(infile)
     else:
-        with open(os.path.join(model_dir, "word_id.json"), "r") as infile:
-            word_id = json.load(infile)
+        with open(os.path.join(model_dir, "word_dict.json"), "r") as infile:
+            word_dict = json.load(infile)
     word_ngrams = model_params["word_ngrams"]
     sort_ngrams = model_params["sort_ngrams"]
 
@@ -78,9 +78,9 @@ def main():
                     label = label.split(label_prefix)[-1]
                     query_description = query_description[20:]
                     test_description_indices = \
-                        np.expand_dims([0] + [word_id[phrase]["id"] for phrase in
+                        np.expand_dims([0] + [word_dict[phrase]["id"] for phrase in
                                               get_all(query_description.split(), word_ngrams, sort_ngrams)
-                                              if phrase in word_id], axis=0)
+                                              if phrase in word_dict], axis=0)
 
                     test_desc_weights = np.zeros_like(test_description_indices, dtype=np.float32)
                     test_desc_weights[0][:len(test_description_indices[0])] = 1. / len(test_description_indices[0])
@@ -97,12 +97,12 @@ def main():
                     predicted_label = labels_dict_inverse[max_index]
                     print(predicted_label == label, predicted_label, max_prob)
             else:
-                test_descriptions, test_labels = parse_txt(args.test_path, join_desc=True)
+                test_descriptions, test_labels = parse_txt(args.test_path)
                 test_indices = np.arange(len(test_descriptions))
                 print("The total number of test datapoints: {}".format(len(test_descriptions)))
 
                 progress_bar = tqdm(total=int(np.ceil(len(test_descriptions) / args.batch_size)))
-                rem_indices, batch_indices = next_batch(test_indices, args.batch_size)
+                remaining_indices, batch_indices = next_batch(test_indices, args.batch_size)
                 accuracy_top_1, accuracy_top_k = 0, 0
                 cnt = 0
 
@@ -124,9 +124,9 @@ def main():
                         if test_label not in label_dict:
                             num_thrown_for_label += 1
                             continue
-                        initial_test_indices = [0] + [word_id[phrase]["id"] for phrase in
+                        initial_test_indices = [0] + [word_dict[phrase]["id"] for phrase in
                                                       get_all(test_description.split(), word_ngrams, sort_ngrams)
-                                                      if phrase in word_id]
+                                                      if phrase in word_dict]
 
                         cnt += 1
                         test_description_indices = \
@@ -144,7 +144,7 @@ def main():
 
                     accuracy_top_k += sum([True if i in j else False for i, j in zip(batch_labels2, top_k)])
                     accuracy_top_1 += sum([True if i == j[-1] else False for i, j in zip(batch_labels2, top_k)])
-                    rem_indices, batch_indices = next_batch(rem_indices, args.batch_size)
+                    remaining_indices, batch_indices = next_batch(remaining_indices, args.batch_size)
                     progress_bar.update()
                 progress_bar.close()
 

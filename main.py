@@ -85,6 +85,7 @@ def main():
 
     use_test = False
     if args.test_path:
+        args.test_path = os.path.abspath(args.test_path)
         if bool(args.use_test):
             use_test = True
 
@@ -97,8 +98,8 @@ def main():
     np.random.seed(args.seed)
 
     train_descriptions, train_labels, max_words = \
-        parse_txt(train_path, return_max_len=True, debug_till_row=-1, fraction=args.data_fraction, seed=args.seed,
-                  label_prefix=args.label_prefix)
+        parse_txt(train_path, as_tokens=True, return_max_len=True,
+                  fraction=args.data_fraction, seed=args.seed, label_prefix=args.label_prefix)
 
     data_specific = {
         "seed": args.seed, "data_fraction": args.data_fraction, "min_word_count": args.min_word_count,
@@ -189,7 +190,7 @@ def main():
     test_description_hashes, test_labels = [], []
     initial_test_len = 0
     if use_test:
-        test_descriptions, test_labels, max_words_test = parse_txt(args.test_path, return_max_len=True,
+        test_descriptions, test_labels, max_words_test = parse_txt(args.test_path, as_tokens=True, return_max_len=True,
                                                                    label_prefix=args.label_prefix)
         initial_test_len = len(test_descriptions)
 

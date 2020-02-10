@@ -42,13 +42,13 @@ def preprocess_data(data_path, preprocessing_function):
     return prep_data_path
 
 
-def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, fraction=1,
+def parse_txt(path, debug_till_row=None, as_tokens=False, return_max_len=False, fraction=1,
               label_prefix="__label__", seed=None):
     """
     Read fasttext format txt file and create data and labels
     :param path: str, path to txt file of fasttext format
     :param debug_till_row: int, till which row to read the file
-    :param join_desc: bool, join the words to form string
+    :param as_tokens: bool, return string as a list of tokens
     :param return_max_len: bool, return tuple (descriptions, labels, max_len)
     :param fraction: float, what fraction of data to use, if < 1, a random fraction will be chosen
     :param label_prefix: str, prefix before the label
@@ -87,10 +87,10 @@ def parse_txt(path, debug_till_row=None, join_desc=False, return_max_len=False, 
             tmp.append(w[len(label_prefix):])
 
         labels.append(" ".join(tmp))
-        if join_desc:
-            descriptions.append(" ".join(row_splitted[index:]))
-        else:
+        if as_tokens:
             descriptions.append(row_splitted[index:])
+        else:
+            descriptions.append(" ".join(row_splitted[index:]))
 
     if return_max_len:
         return descriptions, labels, max_len
@@ -132,10 +132,10 @@ def make_word_vocab(list_of_descriptions, word_n_grams=1, sort_ngrams=False, ret
 
     if disable_progressbar:
         print("Creating train vocabulary", flush=flush)
-    for cur_desc_split in tqdm(list_of_descriptions, disable=disable_progressbar, desc="Creating train vocabulary",
-                               file=sys.stdout):
-        cur_len = len(cur_desc_split)
-        for ng in get_all(cur_desc_split, min(cur_len, word_n_grams), sort_ngrams=sort_ngrams):
+    for current_description_split in tqdm(list_of_descriptions, disable=disable_progressbar, 
+                                          desc="Creating train vocabulary", file=sys.stdout):
+        current_len = len(current_description_split)
+        for ng in get_all(current_description_split, min(current_len, word_n_grams), sort_ngrams=sort_ngrams):
             cnt += 1
             if ng in word_vocab:
                 word_vocab[ng]["cnt"] += 1
@@ -342,15 +342,15 @@ def cache_data(descriptions, labels, word_vocab, label_vocab, word_ngrams, sort_
     return description_hashes, labels2, cache
 
 
-def get_word_label_vocabs(descriptions, labels, word_ngrams, min_word_count, sort_ngrams,
-                          cache_dir, force, show_progress=False, flush=False):
+def get_word_label_vocabs(descriptions, labels, word_ngrams, sort_ngrams, min_word_count, 
+                          cache_dir, force=False, show_progress=False, flush=False):
     """
     Cache data in order not to do repetitive work
     :param descriptions: list, hashed strings of the input data
     :param labels: list
     :param word_ngrams: int
-    :param min_word_count: int, threshold on minimum occurance on words and n-grams
     :param sort_ngrams: bool
+    :param min_word_count: int, threshold on minimum occurance on words and n-grams
     :param cache_dir: str
     :param force: bool
     :param show_progress: bool, show progress bar
